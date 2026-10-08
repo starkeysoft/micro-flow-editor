@@ -2,7 +2,7 @@
 
 A visual, drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.com/package/@ronaldroe/micro-flow) logic flows, in the style of n8n. You draw a logic flow on a canvas, and the editor compiles the graph into real micro-flow objects: a root `Workflow`, `Step`s, `ConditionalStep`, `SwitchStep` and `Case`, `LoopStep`, `DelayStep` and `FlowControlStep`, with a nested `Workflow` for every branch. A bundled server runs flows when you press Run, on a schedule or when a webhook is called, and stores every execution in a SQL database. A small runtime runs exported flows inside your own app, with no server or database.
 
-> The package is called `@ronaldroe/micro-flow-editor`. It is **not published to npm yet**, so the `npx` and `npm install` commands below will work once it is. Until then, run it from a checkout.
+> Published on npm as [`@ronaldroe/micro-flow-editor`](https://www.npmjs.com/package/@ronaldroe/micro-flow-editor). Source: [github.com/starkeysoft/micro-flow-editor](https://github.com/starkeysoft/micro-flow-editor).
 
 ## Features
 

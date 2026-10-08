@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Micro-Flow Editor (`@ronaldroe/micro-flow-editor`, not published to npm yet) is a visual, n8n-style drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.com/package/@ronaldroe/micro-flow) logic flows. A Vue 3 + Vue Flow SPA edits graphs. An Express 5 server compiles graphs into real micro-flow `Workflow` trees, runs them (manual, schedule and webhook triggers), streams progress over SSE and stores flows and executions through Sequelize. A standalone runtime runs exported flows in other apps. The library itself lives in `/mnt/storage1/projects/micro-flow`; read its `CLAUDE.md` when behaviour depends on micro-flow internals.
+Micro-Flow Editor (`@ronaldroe/micro-flow-editor` on npm) is a visual, n8n-style drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.com/package/@ronaldroe/micro-flow) logic flows. A Vue 3 + Vue Flow SPA edits graphs. An Express 5 server compiles graphs into real micro-flow `Workflow` trees, runs them (manual, schedule and webhook triggers), streams progress over SSE and stores flows and executions through Sequelize. A standalone runtime runs exported flows in other apps. The library itself lives in `/mnt/storage1/projects/micro-flow`; read its `CLAUDE.md` when behaviour depends on micro-flow internals.
 
 > **Terminology:** say "logic flow" (or "flow") for what users build. Reserve "workflow" / `Workflow` for the micro-flow class.
 
@@ -94,4 +94,4 @@ Every change must update the docs that describe it: `README.md`, the relevant pa
 
 Commit messages must not mention Claude, AI or any assistant. No Co-Authored-By trailer, no 'Generated with' line.
 
-The git remote is https://github.com/starkeysoft/micro-flow-editor (branch `main`). The npm package is not published yet.
+The git remote is https://github.com/starkeysoft/micro-flow-editor (branch `main`). The package is published to npm as `@ronaldroe/micro-flow-editor`; `prepublishOnly` builds the client and runs the tests.

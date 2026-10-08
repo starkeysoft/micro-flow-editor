@@ -36,7 +36,7 @@ npm start
 npx @ronaldroe/micro-flow-editor
 ```
 
-The package is not published to npm yet. From a checkout, use `node bin/micro-flow-editor.js` after `npm run build`.
+From a checkout instead of npm, use `node bin/micro-flow-editor.js` after `npm run build`.
 
 Each of these serves the editor at http://localhost:8090 and stores data in SQLite. See [Server](server.md) for ports, other databases and every setting.
 
