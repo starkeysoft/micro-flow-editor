@@ -1,0 +1,49 @@
+services:
+  micro-flow-editor:
+    build: .
+    image: micro-flow-editor
+    ports:
+      - "${HOST_PORT:-8090}:8090"
+    environment:
+      # Empty = SQLite in the micro-flow-editor-data volume. Set it in .env to
+      # use another database, e.g. the optional ones below:
+      #   DATABASE_URL=postgres://flow:flow@postgres:5432/flow   (--profile postgres)
+      #   DATABASE_URL=mysql://flow:flow@mysql:3306/flow         (--profile mysql)
+      DATABASE_URL: ${DATABASE_URL:-}
+      BLOCK_PRIVATE_NETWORKS: ${BLOCK_PRIVATE_NETWORKS:-false}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-10}
+      MAX_LOOP_ITERATIONS: ${MAX_LOOP_ITERATIONS:-1000}
+      MAX_EXECUTIONS_PER_FLOW: ${MAX_EXECUTIONS_PER_FLOW:-100}
+    volumes:
+      - micro-flow-editor-data:/app/data
+    restart: unless-stopped
+
+  # Optional databases. Start one with `docker compose --profile postgres up`
+  # (or `--profile mysql`) and point DATABASE_URL at it.
+  postgres:
+    image: postgres:17-alpine
+    profiles: [postgres]
+    environment:
+      POSTGRES_USER: flow
+      POSTGRES_PASSWORD: flow
+      POSTGRES_DB: flow
+    volumes:
+      - micro-flow-editor-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    profiles: [mysql]
+    environment:
+      MYSQL_USER: flow
+      MYSQL_PASSWORD: flow
+      MYSQL_DATABASE: flow
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - micro-flow-editor-mysql:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  micro-flow-editor-data:
+  micro-flow-editor-postgres:
+  micro-flow-editor-mysql:

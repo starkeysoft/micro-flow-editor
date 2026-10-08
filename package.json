@@ -1,0 +1,86 @@
+{
+  "name": "@ronaldroe/micro-flow-editor",
+  "version": "1.0.0",
+  "description": "A visual, drag-and-drop builder for @ronaldroe/micro-flow logic flows, with a server that runs them (manual, webhook and schedule triggers), execution history in any SQL database, and a runtime to run exported flows in your own app.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./runtime": "./runtime/index.js",
+    "./nodes": "./shared/nodes.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "micro-flow-editor": "bin/micro-flow-editor.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "runtime/",
+    "server/",
+    "shared/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "build": "vite build",
+    "dev": "nodemon --watch server --watch shared server/index.js",
+    "dev:client": "vite",
+    "test": "node --test test/*.test.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "micro-flow",
+    "workflow",
+    "logic-flow",
+    "visual-editor",
+    "flow-builder",
+    "drag-and-drop",
+    "no-code",
+    "low-code",
+    "automation",
+    "n8n-alternative",
+    "webhook",
+    "scheduler"
+  ],
+  "author": "Starkey Software",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/starkeysoft/micro-flow-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/starkeysoft/micro-flow-editor/issues"
+  },
+  "homepage": "https://github.com/starkeysoft/micro-flow-editor#readme",
+  "dependencies": {
+    "@ronaldroe/micro-flow": "^4.0.0",
+    "express": "^5.2.1",
+    "node-schedule": "^2.1.1",
+    "sequelize": "^6.37.8",
+    "sqlite3": "^6.0.1"
+  },
+  "optionalDependencies": {
+    "mariadb": "^3.4.0",
+    "mysql2": "^3.11.0",
+    "pg": "^8.13.0",
+    "pg-hstore": "^2.3.4",
+    "tedious": "^18.6.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue-flow/background": "^1.3.2",
+    "@vue-flow/controls": "^1.1.3",
+    "@vue-flow/core": "^1.48.2",
+    "@vue-flow/minimap": "^1.5.4",
+    "nodemon": "^3.1.14",
+    "vite": "^8.3.4",
+    "vue": "^3.5.43",
+    "vue-router": "^5.4.0"
+  }
+}
