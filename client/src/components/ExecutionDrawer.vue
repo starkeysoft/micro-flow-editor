@@ -69,6 +69,36 @@
         </ul>
       </div>
 
+      <!-- Snapshots -->
+      <div v-else-if="tab === 'snapshots'">
+        <form class="exec-head snap-form" @submit.prevent="$emit('save-snapshot', label); label = ''">
+          <span class="field-hint">
+            Every change is saved automatically. A snapshot is a version to go back to{{ flowActive ? ', and it\'s what this active flow\'s triggers run' : '' }}.
+          </span>
+          <div class="snap-new">
+            <input v-model="label" class="input" maxlength="200" placeholder="Label (optional)" aria-label="Snapshot label" />
+            <button class="button small" type="submit" :disabled="snapshotting">Save snapshot</button>
+          </div>
+        </form>
+        <p v-if="snapshotDirty && snapshots.length" class="field-hint changed">● The canvas has changes that aren't in a snapshot yet.</p>
+        <p v-if="!snapshots.length" class="empty">No snapshots yet. Save (Ctrl+S) makes one.</p>
+        <ul v-else class="exec-list">
+          <li v-for="s in snapshots" :key="s.id" class="snap">
+            <div class="snap-main">
+              <span class="snap-label">{{ s.label || 'Snapshot' }}</span>
+              <span v-if="s.live" class="badge" :class="flowActive ? 'good' : 'dim'">{{ flowActive ? 'live' : 'latest' }}</span>
+              <span class="exec-time mono">{{ new Date(s.created_at).toLocaleString() }}</span>
+              <span class="snap-meta">{{ s.node_count }} node{{ s.node_count === 1 ? '' : 's' }}{{ s.created_by ? ` · ${s.created_by}` : '' }}</span>
+            </div>
+            <div class="snap-actions">
+              <button class="button ghost small" type="button" @click="$emit('restore-snapshot', s.id)">Restore</button>
+              <a class="button ghost small icon" :href="api.snapshotExportUrl(s.id)" title="Download as JSON" aria-label="Download as JSON">⇩</a>
+              <button class="button ghost small icon danger" type="button" title="Delete" aria-label="Delete snapshot" @click="$emit('delete-snapshot', s.id)">✕</button>
+            </div>
+          </li>
+        </ul>
+      </div>
+
       <!-- Compiled micro-flow -->
       <div v-else-if="tab === 'micro'">
         <div class="exec-head">
@@ -95,6 +125,7 @@
 import { ref, computed, watch, nextTick, h } from 'vue';
 import { time, duration, statusTone } from '../lib/format.js';
 import JsonBlock from './JsonBlock.vue';
+import { api } from '../lib/api.js';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -105,16 +136,23 @@ const props = defineProps({
   viewing: { type: Object, default: null },
   liveId: { type: String, default: null },
   preview: { type: Object, default: () => ({}) },
+  snapshots: { type: Array, default: () => [] },
+  snapshotDirty: { type: Boolean, default: false },
+  snapshotting: { type: Boolean, default: false },
+  flowActive: { type: Boolean, default: false },
 });
-const emit = defineEmits(['update:open', 'update:tab', 'open-execution', 'close-execution', 'clear-executions', 'select-node', 'load-preview']);
+const emit = defineEmits(['update:open', 'update:tab', 'open-execution', 'close-execution', 'clear-executions', 'select-node', 'load-preview',
+  'load-snapshots', 'save-snapshot', 'restore-snapshot', 'delete-snapshot']);
 
 const microView = ref('tree');
+const label = ref('');
 const logList = ref(null);
 
 const tabs = computed(() => [
   { key: 'output', label: 'Output', count: props.outputs.length || '' },
   { key: 'log', label: 'Log', count: props.log.length || '' },
   { key: 'executions', label: 'Executions', count: props.executions.length || '' },
+  { key: 'snapshots', label: 'Snapshots', count: props.snapshots.length || '' },
   { key: 'micro', label: 'micro-flow' },
 ]);
 
@@ -122,6 +160,7 @@ function select(key) {
   emit('update:tab', key);
   emit('update:open', true);
   if (key === 'micro') emit('load-preview');
+  if (key === 'snapshots') emit('load-snapshots');
 }
 
 // Keep the log scrolled to the newest entry.
@@ -252,6 +291,16 @@ const TreeWorkflow = {
 .exec-time, .exec-dur { font-size: 0.7rem; color: var(--accent-text); }
 .exec-dur { color: var(--muted); }
 .exec-error { grid-column: 1 / -1; font-size: 0.68rem; color: #fca5a5; font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* snapshots */
+.snap-form { align-items: flex-end; }
+.snap-new { display: flex; gap: 6px; flex: 1 1 320px; max-width: 420px; }
+.changed { color: var(--warn); margin-bottom: 0.5rem; }
+.snap { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem; min-height: 44px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; flex-wrap: wrap; }
+.snap-main { display: flex; align-items: center; gap: 0.6rem; flex: 1; min-width: 0; flex-wrap: wrap; }
+.snap-label { font-family: var(--mono); font-size: 0.8rem; color: var(--text); overflow-wrap: anywhere; }
+.snap-meta { font-size: 0.68rem; color: var(--muted); }
+.snap-actions { display: flex; gap: 4px; }
 
 /* micro-flow tree */
 .seg { display: flex; gap: 4px; }

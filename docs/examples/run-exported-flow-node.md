@@ -17,8 +17,6 @@ You will learn:
 npm install @ronaldroe/micro-flow-editor
 ```
 
-(The package isn't published to npm yet. Until it is, install from a local checkout, e.g. `npm install ../micro-flow-editor`.)
-
 In the editor, create a flow from the **Weather board** template, save it, and choose **⋯ → Export JSON**. Save the file as `weather-board.json` next to your script.
 
 ## Complete Example

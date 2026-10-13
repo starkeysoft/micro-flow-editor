@@ -6,6 +6,14 @@
         <h1>micro-flow &mdash; editor</h1>
       </div>
       <div class="header-actions">
+        <button
+          class="button ghost"
+          type="button"
+          :title="session.user ? `Signed in as ${session.user.username}` : 'Settings'"
+          @click="showSettings = true"
+        >
+          {{ session.user ? session.user.username : 'Settings' }}
+        </button>
         <label class="button ghost">
           Import
           <input type="file" accept="application/json,.json" hidden @change="importFile" />
@@ -32,7 +40,7 @@
               <span v-if="flow.description" class="flow-desc">{{ flow.description }}</span>
               <span class="flow-meta">
                 <span v-for="t in flow.triggers" :key="t" class="badge">{{ triggerLabel(t) }}</span>
-                <span class="badge dim">{{ flow.node_count }} nodes</span>
+                <span class="badge dim">{{ flow.node_count }} node{{ flow.node_count === 1 ? '' : 's' }}</span>
                 <span v-if="flow.last_execution" class="badge" :class="statusTone(flow.last_execution.status)">
                   {{ flow.last_execution.status }} · {{ ago(flow.last_execution.started_at) }}
                 </span>
@@ -48,6 +56,9 @@
               <div class="card-actions">
                 <button class="button ghost small icon" type="button" title="Duplicate" aria-label="Duplicate" @click="duplicate(flow)">⧉</button>
                 <a class="button ghost small icon" :href="api.exportUrl(flow.id)" title="Export JSON" aria-label="Export JSON">⇩</a>
+                <button class="button ghost small icon" type="button" title="Archive" aria-label="Archive" @click="archive(flow)">
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+                </button>
                 <button class="button ghost small icon danger" type="button" title="Delete" aria-label="Delete" @click="remove(flow)">✕</button>
               </div>
             </div>
@@ -67,6 +78,38 @@
         </ul>
       </section>
 
+      <!-- Archived flows: collapsed by default -->
+      <details class="archived" :open="archivedOpen" @toggle="archivedOpen = $event.target.open">
+        <summary>
+          <span class="panel-title">Archived</span>
+          <span class="count">{{ archived.length }}</span>
+        </summary>
+        <p class="field-hint">
+          Archived flows are out of the flow list and their triggers are off. Each keeps only its most recent snapshot; unarchiving brings the flow back from it.
+        </p>
+        <p v-if="!archived.length" class="empty">Nothing archived.</p>
+        <ul v-else class="archived-list">
+          <li v-for="a in archived" :key="a.id" class="archived-item">
+            <div class="archived-main">
+              <span class="flow-name">{{ a.name }}</span>
+              <span v-if="a.description" class="flow-desc">{{ a.description }}</span>
+              <span class="flow-meta">
+                <span v-for="t in a.triggers" :key="t" class="badge">{{ triggerLabel(t) }}</span>
+                <span class="badge dim">{{ a.node_count }} node{{ a.node_count === 1 ? '' : 's' }}</span>
+                <span class="archived-when">archived {{ ago(a.archived_at) }}{{ a.archived_by ? ` by ${a.archived_by}` : '' }}</span>
+              </span>
+            </div>
+            <div class="card-actions">
+              <button class="button ghost small" type="button" @click="unarchive(a)">Unarchive</button>
+              <a class="button ghost small icon" :href="api.archivedExportUrl(a.id)" title="Download JSON" aria-label="Download JSON">⇩</a>
+              <button class="button ghost small icon danger" type="button" title="Delete permanently" aria-label="Delete permanently" @click="removeArchived(a)">✕</button>
+            </div>
+          </li>
+        </ul>
+      </details>
+
+      <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
       <footer class="foot">
         Flows run on the server with
         <a href="https://www.npmjs.com/package/@ronaldroe/micro-flow" target="_blank" rel="noopener">@ronaldroe/micro-flow</a>.
@@ -84,6 +127,8 @@ import { toast } from '../lib/toast.js';
 import { ago, statusTone } from '../lib/format.js';
 import { NODE_TYPES } from '@shared/nodes.js';
 import { TEMPLATES } from '@shared/templates.js';
+import { session } from '../lib/session.js';
+import SettingsModal from '../components/SettingsModal.vue';
 
 const router = useRouter();
 const flows = ref([]);
@@ -91,6 +136,48 @@ const loading = ref(true);
 const error = ref('');
 const query = ref('');
 const meta = ref(null);
+const showSettings = ref(false);
+const archived = ref([]);
+const archivedOpen = ref(false);
+
+async function loadArchived() {
+  try {
+    archived.value = await api.listArchived();
+  } catch { /* the section just shows nothing */ }
+}
+
+async function archive(flow) {
+  if (!confirm(`Archive "${flow.name}"?\n\nIt leaves the flow list and its triggers stop. Only its most recent snapshot is kept (edits that aren't in a snapshot are saved as one first); its other snapshots and its execution history are deleted. Unarchive brings it back from that snapshot.`)) return;
+  try {
+    await api.archiveFlow(flow.id);
+    flows.value = flows.value.filter((f) => f.id !== flow.id);
+    await loadArchived();
+    toast(`Archived "${flow.name}"`, 'good');
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
+async function unarchive(item) {
+  try {
+    await api.unarchiveFlow(item.id);
+    await Promise.all([load(), loadArchived()]);
+    toast(`"${item.name}" is back (switched off)`, 'good');
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
+async function removeArchived(item) {
+  if (!confirm(`Delete the archived flow "${item.name}" permanently? This can't be undone.`)) return;
+  try {
+    await api.deleteArchived(item.id);
+    archived.value = archived.value.filter((a) => a.id !== item.id);
+    toast('Deleted permanently');
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -168,6 +255,7 @@ async function importFile(event) {
 }
 
 onMounted(() => {
+  loadArchived();
   document.title = 'micro-flow editor';
   load();
   api.meta().then((m) => { meta.value = m; }).catch(() => {});
@@ -241,6 +329,24 @@ onMounted(() => {
 
 .updated { font-size: 0.68rem; color: var(--dim); margin-left: auto; white-space: nowrap; }
 .card-actions { display: flex; gap: 4px; }
+
+/* archived (collapsed by default) */
+.archived { border-top: 1px solid var(--border); padding-top: 1rem; }
+.archived summary { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; list-style: none; min-height: 36px; }
+.archived summary::-webkit-details-marker { display: none; }
+.archived summary::before { content: '▸'; color: var(--dim); font-size: 0.75rem; transition: transform 0.15s; }
+.archived[open] summary::before { transform: rotate(90deg); }
+.archived .count { color: var(--accent-text); font-size: 0.72rem; }
+.archived > .field-hint { margin: 0.4rem 0 0.8rem; }
+.archived-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.archived-item { display: flex; align-items: center; gap: 0.8rem; padding: 0.7rem 0.9rem; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: rgba(19, 25, 42, .5); }
+.archived-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.archived-item .flow-name { color: var(--muted); }
+.archived-when { font-size: 0.68rem; color: var(--dim); align-self: center; }
+
+@media (max-width: 600px) {
+  .archived-item { flex-direction: column; align-items: stretch; }
+}
 
 .template {
   width: 100%;

@@ -5,7 +5,12 @@ What the editor stores and the JSON formats it uses. The tables are defined in `
 ## Table of Contents
 - [Tables](#tables)
 - [Flows](#flows)
+- [Snapshots](#snapshots)
+- [Archived Flows](#archived-flows)
 - [Executions](#executions)
+- [Settings](#settings)
+- [Users](#users)
+- [Sessions](#sessions)
 - [Graph](#graph)
 - [Export Format](#export-format)
 - [Node Runs](#node-runs)
@@ -14,7 +19,7 @@ What the editor stores and the JSON formats it uses. The tables are defined in `
 
 ## Tables
 
-There are two tables, created by Sequelize on startup. JSON columns are stored as text (`LONGTEXT` on MySQL and MariaDB, `TEXT` elsewhere) and parsed when read. They have no SQL column default, because MySQL doesn't allow defaults on `TEXT` columns. A Sequelize `beforeValidate` hook fills in missing values instead (`{ nodes: [], edges: [] }` for graphs, `{ exit_on_error: true }` for options, `{}` for `node_runs`, `[]` for `log` and `outputs`), so rows written outside the app must supply them. Deleting a flow deletes its executions.
+There are seven tables, created by Sequelize on startup: `flows`, `snapshots` and `executions` hold your logic flows, their saved versions and their runs; `archived_flows` holds archived flows; `settings`, `users` and `sessions` belong to the optional [sign-in](server.md#sign-in). JSON columns are stored as text (`LONGTEXT` on MySQL and MariaDB, `TEXT` elsewhere) and parsed when read. They have no SQL column default, because MySQL doesn't allow defaults on `TEXT` columns. A Sequelize `beforeValidate` hook fills in missing values instead (`{ nodes: [], edges: [] }` for graphs, `{ exit_on_error: true }` for options (in `flows`, `snapshots` and `archived_flows`), `{}` for `node_runs`, `[]` for `log` and `outputs`), so rows written outside the app must supply them. Deleting a flow deletes its snapshots and executions, archiving one deletes its executions and all its snapshots (after copying the latest into `archived_flows`), and deleting a user deletes their sessions.
 
 ## Flows
 
@@ -30,6 +35,48 @@ Table `flows`:
 | `active` | boolean | Whether its Schedule and Webhook triggers listen. Default `false`. |
 | `createdAt`, `updatedAt` | date | Set by Sequelize. The API returns them as `created_at` / `updated_at`. |
 
+The row is the flow's **autosaved working copy**: the editor's changes reach it through the autosave cache, as an `UPDATE` of this row every `FLUSH_INTERVAL_MS` (see [Server: Autosave](server.md#autosave)), so `updatedAt` moves while someone edits. Pending edits may sit in the cache for up to that long; the server writes them before it reads a flow and when it shuts down. Saved versions live in [`snapshots`](#snapshots).
+
+## Snapshots
+
+Table `snapshots`, one row per saved version of a flow. **Save** in the editor, turning a flow on with changes that aren't in a snapshot (label `Activated`), `PUT /api/flows/:id` with a `graph` or `options` (label `Saved through the API`), and archiving a flow that has no snapshot or has changes that aren't in one (label `Archived`) create one. An active flow's Schedule and Webhook triggers run its **latest** snapshot; a flow with no snapshot runs its `flows` row.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key. |
+| `flow_id` | UUID | The flow. |
+| `label` | string (200) | Optional label. Default `''`. |
+| `name` | string (200) | The flow's name when the snapshot was taken. |
+| `description` | string (1000) | The flow's description then. Default `''`. |
+| `graph` | JSON | The [graph](#graph), viewport included. |
+| `options` | JSON | `{ exit_on_error }`. |
+| `created_by` | string (64) | Username of who saved it when sign-in is on, otherwise `null`. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. "Latest" means the newest `createdAt` (ties broken by `id`). The API returns `createdAt` as `created_at`. |
+
+Each flow keeps its newest `MAX_SNAPSHOTS_PER_FLOW` snapshots (100 by default, `0` keeps all); older ones are deleted when a new one is created. Snapshots are never changed after they are created. Unarchiving recreates the kept snapshot with its original `id`, `label`, `created_by` and `createdAt`.
+
+## Archived Flows
+
+Table `archived_flows`, one row per [archived](editor.md#archived-flows) flow. Archiving copies the flow's latest snapshot here (saving an `Archived` snapshot first if the flow has none or has changes that aren't in one), then deletes the flow's row, its executions and all its snapshots, in one transaction. Unarchiving recreates the flow (same `id`, inactive) and that one snapshot from this row, then deletes the row. See [REST API: Archive](api.md#archive).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key: the flow's id. |
+| `name` | string (200) | The flow's name in the kept snapshot. |
+| `description` | string (1000) | Its description there. Default `''`. |
+| `graph` | JSON | The kept snapshot's [graph](#graph). |
+| `options` | JSON | The kept snapshot's `{ exit_on_error }`. |
+| `snapshot_id` | UUID | The kept snapshot's id. |
+| `snapshot_label` | string (200) | Its label. Default `''`. |
+| `snapshot_created_by` | string (64) | Who saved it, or `null`. |
+| `snapshot_created_at` | date | When it was saved. |
+| `flow_created_at` | date | When the flow was created (nullable), restored on unarchive. |
+| `archived_at` | date | When it was archived. |
+| `archived_by` | string (64) | Username of who archived it when sign-in is on, otherwise `null`. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. |
+
+On MySQL dates are stored to the whole second, so restored creation times lose their milliseconds there.
+
 ## Executions
 
 Table `executions`, one row per run:
@@ -42,13 +89,50 @@ Table `executions`, one row per run:
 | `status` | string | `running`, `success`, `error` or `stopped`. |
 | `started_at`, `finished_at` | date | `finished_at` is `null` while running. |
 | `error` | text | The error message, or `null`. |
-| `graph` | JSON | The graph that ran, so old executions still make sense after the flow changes. |
+| `graph` | JSON | The graph that ran, so old executions still make sense after the flow changes. For webhook and schedule runs that is the latest snapshot's graph (or the flow row's, when it has no snapshot). |
 | `node_runs` | JSON | `{ [node_id]: [node run, …] }`. See [Node Runs](#node-runs). |
 | `log` | JSON | `[log entry, …]`. See [Log Entries](#log-entries). |
 | `outputs` | JSON | `[card, …]`. See [Output Cards](#output-cards). |
 | `createdAt`, `updatedAt` | date | Set by Sequelize. |
 
 The row is created as `running` when the run starts, and `status`, `error`, `finished_at`, `node_runs`, `log` and `outputs` are written when it ends. Executions still `running` when the server starts are marked `error` ("interrupted: the server restarted during this run"). Each flow keeps its newest `MAX_EXECUTIONS_PER_FLOW` executions.
+
+## Settings
+
+Table `settings`, editor-wide settings changed from the UI:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | string (64) | Primary key. |
+| `value` | string (1000) | The value as JSON. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. |
+
+The only key so far is `auth_enabled` (`true` / `false`), the editor's sign-in switch. It is read at startup and ignored while `AUTH_ENABLED` is set. With no row, sign-in is off.
+
+## Users
+
+Table `users`, the sign-in accounts. Every user can see and edit every flow; there are no roles.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key. |
+| `username` | string (64), unique | 1–64 characters of letters, digits and `_ . @ -`, trimmed and stored in lowercase (so usernames are case-insensitive on every database). |
+| `password_hash` | string (255) | `scrypt$N$r$p$salt$hash` (salt and hash in base64). |
+| `last_login_at` | date | Last sign-in, or `null`. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. The API returns `createdAt` as `created_at`. |
+
+## Sessions
+
+Table `sessions`, one row per signed-in browser:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | string (64) | Primary key: the hex SHA-256 of the cookie's token. The token itself is never stored. |
+| `user_id` | UUID | The user. Deleting the user deletes their sessions. |
+| `expires_at` | date | When it ends. Pushed forward by `SESSION_TTL_HOURS` when less than half is left. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. |
+
+Expired rows are deleted at startup and every hour.
 
 ## Graph
 
@@ -95,11 +179,11 @@ Note the type names that differ from the titles: Edit Fields is `set`, Filter (S
 
 ### Viewport
 
-Optional. The editor saves its pan and zoom here so a flow reopens where you left it.
+Optional. The editor sends its pan and zoom here with every autosave, so a flow reopens where you left it (on a big screen; phones always fit the flow to the screen). Panning or zooming alone doesn't trigger an autosave.
 
 ## Export Format
 
-**Export JSON** (and `GET /api/flows/:id/export`) produces:
+**Export JSON** (and `GET /api/flows/:id/export`) produces the following, from the flow's autosaved working copy. Downloading a snapshot (`GET /api/snapshots/:id/export`) or an archived flow (`GET /api/archive/:id/export`) produces the same format from that snapshot or archived copy.
 
 ```json
 {

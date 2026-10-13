@@ -38,7 +38,7 @@ npx @ronaldroe/micro-flow-editor
 
 From a checkout instead of npm, use `node bin/micro-flow-editor.js` after `npm run build`.
 
-Each of these serves the editor at http://localhost:8090 and stores data in SQLite. See [Server](server.md) for ports, other databases and every setting.
+Each of these serves the editor at http://localhost:8090 and stores data in SQLite. Sign-in is off, so anyone who can reach the port can use the editor. To require an account, open **Settings** on the flows page and turn **Sign-in** on (see [Using the Editor: Signing In](editor.md#signing-in)). See [Server](server.md) for ports, other databases, sign-in and every setting.
 
 ## Your First Flow
 
@@ -56,7 +56,7 @@ Each of these serves the editor at http://localhost:8090 and stores data in SQLi
 
 The nodes light up as they run, and the drawer's **Output** tab shows two cards: `Big: 12` and `Big: 20`. Click any node to see its input and output in the **Data** tab. Open the drawer's **micro-flow** tab to see what the canvas compiled to: a root `Workflow` with a `LoopStep`, whose body `Workflow` holds a `ConditionalStep` with a nested `Workflow` for each branch.
 
-Press **Save** (Ctrl/⌘ + S) to keep the flow. Running does not need a save: Run sends the canvas as it is.
+There is nothing to save by hand: every change is saved automatically, and the top bar shows **Saved**. Press **Save** (Ctrl/⌘ + S) to keep a **snapshot**, a version you can go back to from the drawer's **Snapshots** tab. Snapshots also decide what goes live: once a flow is active, its webhooks and schedules run the latest snapshot, not the canvas. Run doesn't need either: it sends the canvas as it is. See [Saving and Snapshots](editor.md#saving-and-snapshots).
 
 ## Starting from a Template
 

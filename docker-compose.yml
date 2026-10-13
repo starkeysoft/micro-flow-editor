@@ -14,6 +14,17 @@ services:
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-10}
       MAX_LOOP_ITERATIONS: ${MAX_LOOP_ITERATIONS:-1000}
       MAX_EXECUTIONS_PER_FLOW: ${MAX_EXECUTIONS_PER_FLOW:-100}
+      # Autosave cache: in-process unless REDIS_URL is set, e.g.
+      #   REDIS_URL=redis://redis:6379   (--profile redis)
+      REDIS_URL: ${REDIS_URL:-}
+      FLUSH_INTERVAL_MS: ${FLUSH_INTERVAL_MS:-1000}
+      MAX_SNAPSHOTS_PER_FLOW: ${MAX_SNAPSHOTS_PER_FLOW:-100}
+      # Sign-in: empty = switch it in the editor (off by default).
+      AUTH_ENABLED: ${AUTH_ENABLED:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      TRUST_PROXY: ${TRUST_PROXY:-}
     volumes:
       - micro-flow-editor-data:/app/data
     restart: unless-stopped
@@ -43,7 +54,19 @@ services:
       - micro-flow-editor-mysql:/var/lib/mysql
     restart: unless-stopped
 
+  # Optional Redis for the autosave cache: `docker compose --profile redis up`
+  # with REDIS_URL=redis://redis:6379. Append-only persistence keeps pending
+  # edits across a Redis restart.
+  redis:
+    image: redis:7.4-alpine
+    profiles: [redis]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - micro-flow-editor-redis:/data
+    restart: unless-stopped
+
 volumes:
   micro-flow-editor-data:
   micro-flow-editor-postgres:
   micro-flow-editor-mysql:
+  micro-flow-editor-redis:

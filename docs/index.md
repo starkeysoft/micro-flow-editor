@@ -1,28 +1,28 @@
 # Micro-Flow Editor Documentation
 
-Build micro-flow logic flows on a canvas, run them on a server with manual, schedule and webhook triggers, and run exported flows inside your own app.
+Build micro-flow logic flows on a canvas, run them on a server with manual, schedule and webhook triggers, and run exported flows inside your own app. An optional sign-in keeps the editor private.
 
 ## Table of Contents
 
 ### Getting Started
 - [Getting Started](getting-started.md) - Install, start the editor and build your first flow.
-- [Using the Editor](editor.md) - The canvas, palette, inspector, drawer, runs, history and mobile layout.
+- [Using the Editor](editor.md) - The canvas, palette, inspector, drawer, runs, history, autosave and snapshots, archiving, mobile layout, signing in and Settings.
 
 ### Building Flows
 - [Node Reference](nodes.md) - Every node type: what it does, its fields, its ports and the micro-flow class it compiles to.
 - [Expressions](expressions.md) - `{{ path }}` templates and the `$item`, `$trigger`, `$node`, `$now` and `$execution` roots.
-- [Triggers](triggers.md) - Manual, Schedule and Webhook triggers, active flows and the Respond node.
+- [Triggers](triggers.md) - Manual, Schedule and Webhook triggers, active flows (which run the latest snapshot) and the Respond node.
 
 ### How It Works
 - [Compilation](compilation.md) - How a graph becomes a tree of nested micro-flow Workflows.
-- [Data Model](data-model.md) - The `flows` and `executions` tables, the graph JSON and the export format.
+- [Data Model](data-model.md) - The `flows`, `snapshots`, `archived_flows`, `executions`, `settings`, `users` and `sessions` tables, the graph JSON and the export format.
 
 ### Using It with micro-flow
 - [Runtime](runtime.md) - `compileFlow()` and `runFlow()`: run exported flows in your own Node.js app.
 
 ### Running the Server
-- [Server](server.md) - `startServer()`, the CLI, Docker, environment variables, databases and limits.
-- [REST API](api.md) - Every `/api` route, the live event stream and `/webhook/*`.
+- [Server](server.md) - `startServer()`, the CLI (including `user` for accounts), Docker, environment variables, databases, the autosave cache (memory or Redis), sign-in and limits.
+- [REST API](api.md) - Every `/api` route, autosave drafts, snapshots, the archive, sign-in (`/api/auth/*`), the live event stream and `/webhook/*`.
 
 ### Examples
 - [Bundled Templates](examples/templates.md) - The five starter flows, explained node by node.
@@ -34,4 +34,6 @@ Build micro-flow logic flows on a canvas, run them on a server with manual, sche
 - **Logic flow** (or just **flow**) - what you build on the canvas: nodes and the wires between them.
 - **`Workflow`** - the micro-flow class. A flow compiles into a root `Workflow` with nested `Workflow`s for its branches.
 - **Execution** (or **run**) - one run of a flow. The server saves each one.
+- **Snapshot** - a saved version of a flow, made with **Save**. Every edit is autosaved to the flow itself; an active flow's webhooks and schedules run its latest snapshot.
+- **Archived flow** - a flow taken out of the flow list, with its triggers off and only its latest snapshot kept. Unarchiving brings it back, switched off.
 - **Node** - a box on the canvas. Each node compiles to one micro-flow step in its `Workflow` (a loop node to a group step that wraps its `LoopStep` and hidden helper steps).

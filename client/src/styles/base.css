@@ -150,6 +150,8 @@ textarea.input { resize: vertical; min-height: 84px; line-height: 1.4; }
 .switch input:checked + .track { background: rgba(52, 211, 153, .25); box-shadow: 0 0 12px rgba(52, 211, 153, .35); }
 .switch input:checked + .track::after { transform: translateX(16px); background: var(--good); }
 .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch:has(input:disabled) { cursor: not-allowed; }
+.switch input:disabled + .track { opacity: 0.45; }
 
 /* ── Badges ── */
 .step-type-badge, .badge {

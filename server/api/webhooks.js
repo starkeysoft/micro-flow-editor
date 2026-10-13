@@ -5,6 +5,7 @@ import express from 'express';
 import { Flow } from '../db.js';
 import { runFlow, BusyError } from '../engine/runner.js';
 import { findWebhook } from '../engine/triggers.js';
+import { liveVersion } from '../drafts.js';
 import { GraphError } from '../engine/compile.js';
 
 export const router = express.Router();
@@ -18,8 +19,12 @@ router.all('/webhook/*path', async (req, res) => {
   if (!flow?.active) return res.status(404).json({ error: 'that flow is not active' });
 
   try {
+    // Active flows run their live version: the latest snapshot.
+    const live = await liveVersion(flow);
     const { done } = await runFlow({
       flow,
+      graph: live.graph,
+      options: live.options,
       mode: 'webhook',
       trigger_id: hook.trigger_id,
       trigger_payload: {

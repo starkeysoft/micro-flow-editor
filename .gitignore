@@ -4,3 +4,7 @@ data/
 dist/
 *.sqlite
 *.tgz
+# Research notes stay local
+*RESEARCH*.md
+*-research.md
+research/

@@ -10,10 +10,13 @@ A visual, drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.
 - **Compiles to micro-flow** - Every node maps to a micro-flow class. The drawer's **micro-flow** tab shows the compiled `Workflow` tree and its `serialize()` output.
 - **Live runs** - Nodes light up as they run. Wires show the path the run took. Every node keeps its input and output for each pass, and the drawer shows output cards and an event log.
 - **Triggers** - Manual, Schedule (every N minutes or cron) and Webhook (`/webhook/<path>`, with a Respond node to shape the reply).
+- **Autosave and snapshots** - Every change is saved as you make it. **Save** keeps a snapshot you can restore, download or delete, and an active flow's webhooks and schedules run the latest snapshot, so half-finished edits never go live.
+- **Archiving** - Archive a flow you no longer need: it leaves the flow list and its triggers stop, but its latest snapshot is kept, so you can unarchive it (same id, switched off), download it or delete it for good.
 - **Execution history** - Every manual, webhook and scheduled run is saved. Open an old run and its data shows on the canvas again.
 - **Any SQL database** - SQLite by default. PostgreSQL, MySQL, MariaDB and SQL Server are supported through Sequelize with `DATABASE_URL`.
 - **Expressions** - `{{ path }}`, `$item`, `$trigger`, `$node["Name"]`, `$now` and `$execution` in node fields. There is no code node and no `eval`.
 - **Runtime for your app** - `compileFlow()` / `runFlow()` run an exported flow in any Node.js app. `compileFlow(...).workflow` is a real micro-flow `Workflow`.
+- **Optional sign-in** - Off by default. Turn it on in the editor's Settings (or force it with `AUTH_ENABLED`) to require a username and password for the editor and its API. Webhooks stay public.
 - **Works on phones** - Bottom-sheet palette and inspector, a floating + button, tap-to-connect ports and pinch zoom.
 - **Docker-ready** - One `docker compose up`, with optional PostgreSQL or MySQL profiles.
 
@@ -56,9 +59,12 @@ npx @ronaldroe/micro-flow-editor --port 8090 --db postgres://user:pass@localhost
 | `--db`, `--database-url <url>` | `DATABASE_URL` | Sequelize connection URL. |
 | `--sqlite <file>` | `SQLITE_PATH` | SQLite file to use when no URL is given. |
 | `--block-private-networks[=true\|false]` | `BLOCK_PRIVATE_NETWORKS` | Turns on the SSRF guard for HTTP Request nodes (no value means `true`). |
+| `--auth[=true\|false]` | `AUTH_ENABLED` | Forces sign-in on (no value means `true`) or off and locks the editor's switch. |
 | `-h`, `--help` | | Prints the usage. |
 
 Flags override the environment. From a checkout, run `node bin/micro-flow-editor.js` after `npm run build`. See [Server](docs/server.md) for the programmatic `startServer()` API.
+
+`micro-flow-editor user <list|add|passwd|remove> [username]` manages sign-in accounts against the same database (put `--db` / `--sqlite` before `user`). Passwords are read from a hidden prompt, or from stdin when piped, never from the command line. See [Server: The user Command](docs/server.md#the-user-command).
 
 ## Configuration
 
@@ -75,8 +81,44 @@ Every setting is optional. Copy `.env.example` to `.env` to set them.
 | `MAX_CONCURRENT_RUNS` | `10` | Runs allowed at once. Further runs are refused with HTTP 429. |
 | `MAX_LOOP_ITERATIONS` | `1000` | Most passes any Loop, Repeat or Repeat While node makes. |
 | `MAX_EXECUTIONS_PER_FLOW` | `100` | Executions kept per flow. Older ones are deleted after each run. |
+| `REDIS_URL` | *(empty)* | Keeps the autosave cache in Redis (e.g. `redis://redis:6379`) instead of in the server process. Needs the optional `redis` package. |
+| `FLUSH_INTERVAL_MS` | `1000` | How often the background worker writes autosaved edits to the database (at least `100`). |
+| `MAX_SNAPSHOTS_PER_FLOW` | `100` | Snapshots kept per flow. Older ones are deleted when a new one is saved. `0` keeps them all. |
+| `AUTH_ENABLED` | *(empty)* | Empty: sign-in is switched in the editor's Settings (off until turned on). `true` / `false`: forces it on or off and locks that switch. |
+| `ADMIN_USERNAME` | *(empty)* | With `ADMIN_PASSWORD`, creates this account at startup if it doesn't exist. Never changes an existing one. |
+| `ADMIN_PASSWORD` | *(empty)* | Password for `ADMIN_USERNAME` (8–256 characters). |
+| `SESSION_TTL_HOURS` | `168` | How long a sign-in lasts. Sessions in use are renewed. |
+| `TRUST_PROXY` | *(empty)* | Behind a reverse proxy: `true`, a hop count, or addresses (Express `trust proxy`), so client IPs, HTTPS (for `Secure` cookies) and the host come from `X-Forwarded-*`. Empty, `false`, `no`, `off` or `0` trusts no proxy. |
 
 Boolean variables accept `1`, `true`, `yes` or `on`.
+
+## Autosave and Snapshots
+
+The editor saves every change on its own, about 400 ms after you make it. The top bar shows **Saved**, **Saving…** or **Offline – retrying**; there is no "unsaved changes" prompt any more. On the server, edits go into a cache first and a background worker writes them to the flow's row every `FLUSH_INTERVAL_MS` (1 s by default). The cache lives in the server process unless `REDIS_URL` is set. Anything that reads a flow writes its pending edits first, and stopping the server writes them all.
+
+**Save** (Ctrl/⌘ + S) creates a **snapshot**: a named version of the flow. The **Snapshots** tab in the drawer lists them, and each one can be restored onto the canvas, downloaded as an importable JSON file or deleted. Up to `MAX_SNAPSHOTS_PER_FLOW` are kept per flow.
+
+**Save is what goes live.** An active flow's webhooks and schedules run its latest snapshot, not the autosaved canvas, so you can edit a live flow without the half-finished version answering requests. Press Save when the changes are ready. Turning a flow on saves an "Activated" snapshot if it has changes that aren't in one. **▶ Run** in the editor still runs the canvas as it is. See [Using the Editor: Saving](docs/editor.md#saving-and-snapshots) and [Server: Autosave](docs/server.md#autosave).
+
+### Archiving
+
+**Archive** (the box icon on a flow card, or **⋯ → Archive flow…** in the editor) takes a flow out of the flow list and stops its triggers and running executions. Only its most recent snapshot is kept (edits that aren't in a snapshot are saved as an "Archived" snapshot first); its other snapshots and its execution history are deleted. The collapsed **Archived** section at the bottom of the flows page lists archived flows, with **Unarchive** (brings the flow back with the same id, switched off, with that snapshot as its only one), **Download** and **Delete permanently**. See [Using the Editor: Archived flows](docs/editor.md#archived-flows) and [REST API: Archive](docs/api.md#archive).
+
+## Sign-in (optional)
+
+Sign-in is **off by default**: anyone who can reach the editor can use it. To require an account:
+
+- **In the editor:** open **Settings** (flows page header, or **⋯ → Settings…** on the canvas) and turn **Sign-in** on. It asks for an account in the same step: you create the first one if there are none, otherwise you sign in with an existing one. Add more users in the same dialog.
+- **From the environment:** set `AUTH_ENABLED=true` (or `--auth`). The editor's switch is then locked. Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` to create the first account at startup; without them, the first person to open the editor creates it.
+
+While it is on, the editor and every `/api` route need a session (an `HttpOnly` cookie); `/webhook/*` stays public so outside callers still work. Every user can see and edit every flow; there are no roles. Forgot a password? Reset it on the server:
+
+```bash
+micro-flow-editor user passwd admin
+docker compose exec micro-flow-editor node bin/micro-flow-editor.js user passwd admin
+```
+
+See [Server: Sign-in](docs/server.md#sign-in) for sessions, proxies, rate limiting and recovery.
 
 ## Choosing a Database
 
@@ -104,6 +146,15 @@ docker compose --profile mysql up -d --build
 ```
 
 The editor retries the connection for about a minute while the database container starts.
+
+To keep the autosave cache in Redis (it then survives a restart of the editor, and several editor instances can share it), start the `redis` profile:
+
+```bash
+echo 'REDIS_URL=redis://redis:6379' >> .env
+docker compose --profile redis up -d --build
+```
+
+The `redis` service uses `redis:7.4-alpine` with append-only persistence in the `micro-flow-editor-redis` volume. Profiles combine: `--profile postgres --profile redis`.
 
 ## Using It with micro-flow
 
@@ -150,7 +201,7 @@ A node's **Retries** and **Timeout** settings become `max_retries` and `max_time
 
 | Keys | Action |
 |------|--------|
-| Ctrl/⌘ + S | Save |
+| Ctrl/⌘ + S | Save a snapshot |
 | Ctrl/⌘ + Enter | Run the flow |
 | Ctrl/⌘ + Z | Undo |
 | Ctrl/⌘ + Shift + Z, Ctrl + Y | Redo |
@@ -171,7 +222,7 @@ On screens 760px wide or less, the editor switches to a touch layout:
 - To connect two nodes, tap an output port, then tap an input port.
 - Pinch to zoom and drag to pan.
 - Select a wire to show its **+** (insert a node) and **✕** (delete) buttons.
-- Save, Undo, Redo and the Active switch move into the **⋯** menu.
+- Save snapshot, Undo, Redo and the Active switch move into the **⋯** menu. The save indicator only shows when the editor is offline.
 
 ## Testing
 
@@ -179,7 +230,11 @@ On screens 760px wide or less, the editor switches to a touch layout:
 npm test
 ```
 
-Runs `test/*.test.js` with Node's built-in test runner. The engine tests use an in-memory SQLite database, and the runtime tests need no database.
+Runs `test/*.test.js` with Node's built-in test runner. The engine, server, autosave, archive and sign-in tests use an in-memory SQLite database (the `user` CLI tests in `test/auth-cli.test.js` use a temporary SQLite file), and the runtime tests need no database. The Redis autosave test (`test/drafts-redis.test.js`) is skipped unless `TEST_REDIS_URL` points at a Redis server:
+
+```bash
+TEST_REDIS_URL=redis://localhost:6379 npm test
+```
 
 ## Documentation
 

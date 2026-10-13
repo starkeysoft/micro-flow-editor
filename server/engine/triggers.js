@@ -7,6 +7,7 @@
 import schedule from 'node-schedule';
 import { Flow } from '../db.js';
 import { runFlow } from './runner.js';
+import { liveVersion } from '../drafts.js';
 
 const jobs = new Map();      // flow id → [Job]
 const webhooks = new Map();  // `${METHOD} ${path}` → { flow_id, trigger_id }
@@ -54,25 +55,27 @@ export function unregister(flow_id) {
   for (const [key, value] of webhooks) if (value.flow_id === flow_id) webhooks.delete(key);
 }
 
-// (Re)registers a flow's triggers. Inactive flows just get unregistered.
-export function register(flow) {
+// (Re)registers a flow's triggers from `graph` (normally the live version:
+// see registerLive). Inactive flows just get unregistered.
+export function register(flow, graph = flow.graph) {
   unregister(flow.id);
   if (!flow.active) return;
 
-  checkWebhookConflicts(flow);
-  for (const node of flow.graph.nodes.filter((n) => n.type === 'webhook')) {
+  checkWebhookConflicts({ id: flow.id, graph });
+  for (const node of graph.nodes.filter((n) => n.type === 'webhook')) {
     for (const key of webhookKeys(node)) webhooks.set(key, { flow_id: flow.id, trigger_id: node.id });
   }
 
   const flow_jobs = [];
-  for (const node of flow.graph.nodes.filter((n) => n.type === 'schedule')) {
+  for (const node of graph.nodes.filter((n) => n.type === 'schedule')) {
     const rule = scheduleRule(node);
     const fire = async () => {
-      // Read the latest saved version, so edits apply without re-activating.
+      // Run the latest snapshot (the live version), read when it fires.
       const current = await Flow.findByPk(flow.id);
       if (!current?.active) return;
       try {
-        await runFlow({ flow: current, mode: 'schedule', trigger_id: node.id });
+        const live = await liveVersion(current);
+        await runFlow({ flow: current, graph: live.graph, options: live.options, mode: 'schedule', trigger_id: node.id });
       } catch (error) {
         console.error(`Scheduled run of "${current.name}" failed to start: ${error.message}`);
       }
@@ -91,10 +94,15 @@ export function register(flow) {
   jobs.set(flow.id, flow_jobs);
 }
 
+/** Registers a flow's triggers from its live version (latest snapshot). */
+export async function registerLive(flow) {
+  register(flow, (await liveVersion(flow)).graph);
+}
+
 export async function registerAll() {
   for (const flow of await Flow.findAll({ where: { active: true } })) {
     try {
-      register(flow);
+      await registerLive(flow);
     } catch (error) {
       console.error(`Could not activate "${flow.name}": ${error.message}`);
       unregister(flow.id);

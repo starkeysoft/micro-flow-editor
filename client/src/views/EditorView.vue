@@ -10,7 +10,7 @@
         maxlength="200"
         @keydown.enter="$event.target.blur()"
       />
-      <span class="save-state" :class="{ dirty }">{{ saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved' }}</span>
+      <span class="save-state" :class="saveState" :title="saveStateTitle" aria-live="polite">{{ saveStateText }}</span>
 
       <div class="topbar-tools">
         <button class="button ghost small icon wide-only" type="button" title="Undo (Ctrl+Z)" aria-label="Undo" :disabled="!history.canUndo.value" @click="undo">↶</button>
@@ -22,14 +22,20 @@
           <span class="label">{{ active ? 'Active' : 'Inactive' }}</span>
         </label>
 
-        <button class="button ghost small wide-only" type="button" title="Save (Ctrl+S)" :disabled="saving || !dirty" @click="save()">Save</button>
+        <button
+          class="button ghost small wide-only snap-btn"
+          type="button"
+          :title="snapshotDirty ? 'Save a snapshot (Ctrl+S). Edits are autosaved; a snapshot is a version you can go back to, and what an active flow runs.' : 'Nothing new since the latest snapshot'"
+          :disabled="snapshotting || (!snapshotDirty && Boolean(latestSnapshot))"
+          @click="saveSnapshot()"
+        >Save<span v-if="snapshotDirty" class="snap-dot" aria-label="(changes since the last snapshot)"></span></button>
         <button v-if="!running" class="button small" type="button" title="Run (Ctrl+Enter)" :disabled="!loaded" @click="run()">▶ Run</button>
         <button v-else class="button small danger" type="button" title="Stop" @click="stop">■ Stop</button>
 
         <div class="menu-wrap">
           <button class="button ghost small icon" type="button" aria-label="More" :aria-expanded="menuOpen" @click.stop="menuOpen = !menuOpen">⋯</button>
           <div v-if="menuOpen" class="menu" role="menu" @click="menuOpen = false">
-            <button v-if="isNarrow" type="button" :disabled="!dirty" @click="save()">Save <span class="kbd">Ctrl S</span></button>
+            <button v-if="isNarrow" type="button" :disabled="snapshotting || (!snapshotDirty && Boolean(latestSnapshot))" @click="saveSnapshot()">Save snapshot <span class="kbd">Ctrl S</span></button>
             <button v-if="isNarrow" type="button" :disabled="!history.canUndo.value" @click="undo">Undo</button>
             <button v-if="isNarrow" type="button" :disabled="!history.canRedo.value" @click="redo">Redo</button>
             <label v-if="isNarrow" class="check" @click.stop>
@@ -46,7 +52,10 @@
             <button type="button" @click="duplicateFlow">Duplicate flow</button>
             <button type="button" @click="showDetails = true">Description…</button>
             <button type="button" @click="showShortcuts = true">Keyboard shortcuts</button>
+            <button type="button" @click="showSettings = true">Settings…</button>
+            <button v-if="session.user" type="button" @click="signOut">Sign out ({{ session.user.username }})</button>
             <hr />
+            <button type="button" @click="archiveFlow">Archive flow…</button>
             <button type="button" class="danger" @click="deleteFlow">Delete flow</button>
           </div>
         </div>
@@ -131,11 +140,19 @@
       :viewing="viewing"
       :live-id="liveId"
       :preview="previewState"
+      :snapshots="snapshots"
+      :snapshot-dirty="snapshotDirty"
+      :snapshotting="snapshotting"
+      :flow-active="active"
       @open-execution="openExecution"
       @close-execution="closeExecution"
       @clear-executions="clearExecutions"
       @select-node="selectNode"
       @load-preview="loadPreview"
+      @load-snapshots="loadSnapshots"
+      @save-snapshot="saveSnapshot"
+      @restore-snapshot="restoreSnapshot"
+      @delete-snapshot="deleteSnapshot"
     />
 
     <!-- Mobile sheets -->
@@ -184,6 +201,8 @@
       </div>
     </div>
 
+    <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
     <!-- Shortcuts modal -->
     <div v-if="showShortcuts" class="scrim" @click.self="showShortcuts = false">
       <div class="modal">
@@ -219,6 +238,8 @@ import NodePalette from '../components/NodePalette.vue';
 import NodeInspector from '../components/NodeInspector.vue';
 import ExecutionDrawer from '../components/ExecutionDrawer.vue';
 import StatusPanel from '../components/StatusPanel.vue';
+import SettingsModal from '../components/SettingsModal.vue';
+import { session, loadSession, signedOut } from '../lib/session.js';
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -254,6 +275,7 @@ const canvasWrap = ref(null);
 const menuOpen = ref(false);
 const showDetails = ref(false);
 const showShortcuts = ref(false);
+const showSettings = ref(false);
 const sheet = ref(null);          // null | 'palette' | 'inspector' (mobile)
 const quickAdd = ref(null);       // { x, y } (desktop popover)
 const drawerOpen = ref(!narrowQuery.matches);
@@ -267,7 +289,6 @@ const flowName = ref('');
 const flowDescription = ref('');
 const exitOnError = ref(true);
 const active = ref(false);
-const saving = ref(false);
 const savedJson = ref('');
 const savedMeta = ref('');
 let initialViewport = { x: 0, y: 0, zoom: 1 };
@@ -276,6 +297,10 @@ let savedViewport = null;
 const graphJson = computed(() => JSON.stringify(toGraph(nodes.value, edges.value)));
 const metaJson = computed(() => JSON.stringify([flowName.value, flowDescription.value, exitOnError.value]));
 const dirty = computed(() => loaded.value && (graphJson.value !== savedJson.value || metaJson.value !== savedMeta.value));
+const saveStateText = computed(() => ({ saved: 'Saved', pending: 'Saving…', saving: 'Saving…', offline: 'Offline – retrying' }[saveState.value]));
+const saveStateTitle = computed(() => (saveState.value === 'offline'
+  ? 'The server can\'t be reached. Your edits are kept here and sent when it\'s back.'
+  : 'Every change is saved automatically. Save (Ctrl+S) keeps a snapshot you can go back to.'));
 const hasListeningTrigger = computed(() => nodes.value.some((n) => ['schedule', 'webhook'].includes(n.data.type)));
 
 // ── Selection ──
@@ -333,13 +358,30 @@ function redo() {
 }
 
 // ── Loading and saving ──
+// A refresh while the server restarts gets no response for a moment, so
+// network errors (no HTTP status) are retried before giving up.
+async function fetchFlow() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await api.getFlow(props.id);
+    } catch (e) {
+      if (e.status || attempt >= 8) throw e;
+      loadError.value = 'Reconnecting to the server…';
+      await new Promise((r) => setTimeout(r, Math.min(4000, 500 * attempt)));
+    }
+  }
+}
+
 async function load() {
   try {
-    const flow = await api.getFlow(props.id);
+    const flow = await fetchFlow();
+    loadError.value = '';
     flowName.value = flow.name;
     flowDescription.value = flow.description;
     exitOnError.value = flow.options?.exit_on_error !== false;
     active.value = flow.active;
+    snapshotDirty.value = flow.snapshot.changed_since;
+    latestSnapshot.value = flow.snapshot.latest;
     // A viewport saved on a big screen can leave a phone looking at nothing,
     // so phones always fit the flow instead.
     savedViewport = isNarrow.value ? null : flow.graph.viewport ?? null;
@@ -347,6 +389,10 @@ async function load() {
     const { nodes: n, edges: e } = fromGraph(flow.graph);
     setNodes(n);
     setEdges(e);
+    // The loaded document is the saved baseline (before the autosave watcher
+    // sees `loaded`).
+    savedJson.value = graphJson.value;
+    savedMeta.value = metaJson.value;
     loaded.value = true;
     await nextTick();
     savedJson.value = graphJson.value;
@@ -354,7 +400,14 @@ async function load() {
     history.reset(graphJson.value);
     document.title = `${flow.name} · micro-flow editor`;
   } catch (e) {
-    loadError.value = e.status === 404 ? 'This flow does not exist (it may have been deleted).' : `Could not load the flow: ${e.message}`;
+    if (e.status === 404) {
+      const archived = await api.getArchived(props.id).catch(() => null);
+      loadError.value = archived
+        ? `"${archived.name}" is archived. Unarchive it from the Archived section of the flows page.`
+        : 'This flow does not exist (it may have been deleted).';
+    } else {
+      loadError.value = `Could not load the flow: ${e.message}`;
+    }
   }
 }
 
@@ -362,46 +415,145 @@ function onPaneReady() {
   if (!savedViewport) nextTick(() => fitView({ padding: isNarrow.value ? 0.08 : 0.2, maxZoom: 1 }));
 }
 
-async function save(extra = {}) {
-  if (saving.value) return false;
-  saving.value = true;
-  const graph = { ...toGraph(nodes.value, edges.value), viewport: getViewport() };
+// ── Autosave ──
+// Every change is sent to the server's draft cache shortly after it's made;
+// the server writes it to the database in the background. Save creates a
+// snapshot, which is also what an active flow's triggers run.
+const AUTOSAVE_DELAY_MS = 400;
+const RETRY_MS = 3000;
+const saveState = ref('saved'); // saved | pending | saving | offline
+const snapshotDirty = ref(false); // edits since the latest snapshot
+const latestSnapshot = ref(null);
+const snapshots = ref([]);
+const snapshotting = ref(false);
+let autosaveTimer = null;
+let inFlight = null;
+let deleted = false;
+
+const draftBody = () => ({
+  name: flowName.value,
+  description: flowDescription.value,
+  graph: { ...toGraph(nodes.value, edges.value), viewport: getViewport() },
+  options: { exit_on_error: exitOnError.value },
+});
+
+watch([graphJson, metaJson], () => {
+  if (!loaded.value || deleted || !dirty.value) return;
+  snapshotDirty.value = true;
+  if (saveState.value !== 'saving') saveState.value = 'pending';
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(sendDraft, AUTOSAVE_DELAY_MS);
+});
+
+// Sends the current document; one request at a time, newest state wins.
+async function sendDraft() {
+  clearTimeout(autosaveTimer);
+  if (inFlight) await inFlight;
+  if (deleted || !dirty.value) {
+    if (saveState.value !== 'offline') saveState.value = 'saved';
+    return;
+  }
   const json = graphJson.value;
   const meta = metaJson.value;
-  try {
-    const flow = await api.updateFlow(props.id, {
-      name: flowName.value,
-      description: flowDescription.value,
-      graph,
-      options: { exit_on_error: exitOnError.value },
-      ...extra,
-    });
-    savedJson.value = json;
-    savedMeta.value = meta;
-    active.value = flow.active;
-    document.title = `${flow.name} · micro-flow editor`;
-    return true;
-  } catch (e) {
-    toast(e.message, 'bad', 7000);
-    // Saving can succeed but deactivate the flow (bad cron, webhook clash).
-    if (e.status === 400) {
+  saveState.value = 'saving';
+  inFlight = api.saveDraft(props.id, draftBody())
+    .then(() => {
       savedJson.value = json;
       savedMeta.value = meta;
+      saveState.value = dirty.value ? 'pending' : 'saved';
+      if (dirty.value) autosaveTimer = setTimeout(sendDraft, AUTOSAVE_DELAY_MS);
+      document.title = `${flowName.value} · micro-flow editor`;
+    })
+    .catch((e) => {
+      saveState.value = 'offline';
+      if (e.status === 404) return toast('This flow was deleted, so your edits can\'t be saved.', 'bad', 8000);
+      if (e.status !== 401) autosaveTimer = setTimeout(sendDraft, RETRY_MS);
+    })
+    .finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+/** Sends pending edits now. Resolves true when everything is saved. */
+async function flushAutosave() {
+  if (inFlight) await inFlight;
+  if (dirty.value) await sendDraft();
+  return !dirty.value;
+}
+
+// ── Snapshots ──
+async function loadSnapshots() {
+  try {
+    snapshots.value = await api.listSnapshots(props.id);
+  } catch { /* the tab shows an empty list */ }
+}
+
+async function saveSnapshot(label = '') {
+  if (snapshotting.value) return;
+  snapshotting.value = true;
+  try {
+    if (!(await flushAutosave())) return toast('Your latest edits aren\'t saved yet (offline?). Try again in a moment.', 'bad', 6000);
+    latestSnapshot.value = await api.createSnapshot(props.id, { label });
+    snapshotDirty.value = false;
+    toast(active.value ? 'Snapshot saved. The flow\'s triggers now run it.' : 'Snapshot saved', 'good');
+    loadSnapshots();
+  } catch (e) {
+    toast(e.message, 'bad', 8000);
+    // The snapshot was saved, but its triggers couldn't start, so the
+    // server turned the flow off.
+    if (e.deactivated) {
       active.value = false;
+      snapshotDirty.value = false;
+      await loadSnapshots();
+      latestSnapshot.value = snapshots.value[0] ?? latestSnapshot.value;
     }
-    return false;
   } finally {
-    saving.value = false;
+    snapshotting.value = false;
+  }
+}
+
+async function restoreSnapshot(id) {
+  if (!confirm('Replace the canvas with this snapshot? Ctrl+Z undoes it.')) return;
+  try {
+    const snap = await api.getSnapshot(id);
+    applyGraph(JSON.stringify(snap.graph));
+    flowName.value = snap.name;
+    flowDescription.value = snap.description;
+    exitOnError.value = snap.options?.exit_on_error !== false;
+    toast(`Restored the snapshot from ${new Date(snap.created_at).toLocaleString()}.${active.value ? ' Save to make it live.' : ''}`, 'good', 6000);
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
+async function deleteSnapshot(id) {
+  if (!confirm('Delete this snapshot?')) return;
+  try {
+    await api.deleteSnapshot(id);
+    await loadSnapshots();
+    latestSnapshot.value = snapshots.value[0] ?? null;
+  } catch (e) {
+    toast(e.message, 'bad');
   }
 }
 
 async function setActive(value) {
-  const ok = await save({ active: value });
-  if (ok) toast(value ? 'Active: listening on Schedule and Webhook triggers' : 'Inactive', value ? 'good' : 'info');
+  if (!(await flushAutosave())) return toast('Your latest edits aren\'t saved yet (offline?).', 'bad');
+  try {
+    const flow = await api.updateFlow(props.id, { active: value });
+    active.value = flow.active;
+    snapshotDirty.value = flow.snapshot.changed_since;
+    latestSnapshot.value = flow.snapshot.latest;
+    toast(value ? 'Active: the triggers listen, running the latest snapshot' : 'Inactive', value ? 'good' : 'info', 5000);
+    loadSnapshots();
+  } catch (e) {
+    toast(e.message, 'bad', 7000);
+    // The server turns the flow back off if its triggers can't start.
+    if (e.deactivated) active.value = false;
+  }
 }
 
 async function duplicateFlow() {
-  if (dirty.value && !(await save())) return;
+  if (!(await flushAutosave())) return toast('Your latest edits aren\'t saved yet (offline?).', 'bad');
   try {
     const copy = await api.duplicateFlow(props.id);
     router.push(`/flows/${copy.id}`);
@@ -410,9 +562,26 @@ async function duplicateFlow() {
   }
 }
 
+async function archiveFlow() {
+  if (!confirm(`Archive "${flowName.value}"?\n\nIt leaves the flow list and its triggers stop. Only its most recent snapshot is kept (edits that aren't in a snapshot are saved as one first); its other snapshots and its execution history are deleted. Unarchive it from the flows page to bring it back.`)) return;
+  if (!(await flushAutosave())) return toast('Your latest edits aren\'t saved yet (offline?).', 'bad');
+  try {
+    deleted = true; // no more autosaves for this flow
+    clearTimeout(autosaveTimer);
+    await api.archiveFlow(props.id);
+    toast(`Archived "${flowName.value}"`, 'good');
+    router.push('/');
+  } catch (e) {
+    deleted = false;
+    toast(e.message, 'bad');
+  }
+}
+
 async function deleteFlow() {
   if (!confirm(`Delete "${flowName.value}" and all of its executions?`)) return;
   try {
+    deleted = true;
+    clearTimeout(autosaveTimer);
     await api.deleteFlow(props.id);
     savedJson.value = graphJson.value;
     savedMeta.value = metaJson.value;
@@ -847,6 +1016,21 @@ function connectStream() {
   source.onmessage = (event) => {
     try { handleMessage(JSON.parse(event.data)); } catch (e) { console.error(e); }
   };
+  // EventSource retries forever on its own; stop if the session is gone.
+  source.onerror = async () => {
+    const now = await loadSession().catch(() => null);
+    if (now?.auth_enabled && !now.user) {
+      disconnectStream();
+      signedOut();
+    }
+  };
+}
+
+async function signOut() {
+  if (!(await flushAutosave()) && !confirm('Your latest edits couldn\'t be saved. Sign out anyway?')) return;
+  await api.logout().catch(() => {});
+  await loadSession();
+  router.push('/login');
 }
 
 function disconnectStream() {
@@ -856,6 +1040,8 @@ function disconnectStream() {
 
 // Browsers allow ~6 connections per host over HTTP/1.1, so hidden tabs let go.
 function onVisibility() {
+  // Switching apps on a phone may be the last chance to save.
+  if (document.hidden && dirty.value) sendDraft();
   if (document.hidden && !running.value) disconnectStream();
   else if (!document.hidden) connectStream();
 }
@@ -929,7 +1115,7 @@ function onKeydown(event) {
   const key = event.key.toLowerCase();
   const typing = event.target.closest?.('input, textarea, select, [contenteditable]');
 
-  if (mod && key === 's') { event.preventDefault(); save(); return; }
+  if (mod && key === 's') { event.preventDefault(); saveSnapshot(); return; }
   if (mod && key === 'enter') { event.preventDefault(); run(); return; }
   if (key === 'escape') {
     menuOpen.value = false;
@@ -971,26 +1157,46 @@ function onPaste(event) {
   }
 }
 
+// Leaving the page: send pending edits with a keepalive request, which the
+// browser delivers even as the page goes away. Keepalive bodies are capped at
+// 64 KB, so a bigger flow asks the browser to confirm leaving instead.
+let keptAlive = '';
+
+function sendKeepalive() {
+  if (!dirty.value || deleted) return true;
+  const body = JSON.stringify(draftBody());
+  if (body.length >= 60000) return false;
+  if (body === keptAlive) return true; // beforeunload and pagehide both fire
+  keptAlive = body;
+  fetch(`/api/flows/${props.id}/draft`, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body });
+  return true;
+}
+
 function onBeforeUnload(event) {
-  if (dirty.value) {
+  if (!sendKeepalive()) {
     event.preventDefault();
     event.returnValue = '';
   }
 }
 
+// Phones often skip beforeunload; pagehide still fires when a tab closes.
+const onPageHide = () => sendKeepalive();
+
 function onDocumentClick() {
   menuOpen.value = false;
 }
 
-onBeforeRouteLeave(() => !dirty.value || confirm('You have unsaved changes. Leave anyway?'));
+onBeforeRouteLeave(async () => deleted || (await flushAutosave()) || confirm('Your latest edits couldn\'t be saved. Leave anyway?'));
 
 onMounted(async () => {
   await load();
   loadExecutions();
+  loadSnapshots();
   connectStream();
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('paste', onPaste);
   window.addEventListener('beforeunload', onBeforeUnload);
+  window.addEventListener('pagehide', onPageHide);
   document.addEventListener('visibilitychange', onVisibility);
   document.addEventListener('click', onDocumentClick);
 });
@@ -1001,6 +1207,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('paste', onPaste);
   window.removeEventListener('beforeunload', onBeforeUnload);
+  window.removeEventListener('pagehide', onPageHide);
   document.removeEventListener('visibilitychange', onVisibility);
   document.removeEventListener('click', onDocumentClick);
   clearTimeout(historyTimer);
@@ -1048,7 +1255,10 @@ onBeforeUnmount(() => {
 .flow-title:focus { outline: none; border-color: var(--accent); color: var(--text); background: var(--bg); }
 
 .save-state { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); white-space: nowrap; }
-.save-state.dirty { color: var(--warn); }
+.save-state.pending, .save-state.saving { color: var(--accent-text); }
+.save-state.offline { color: var(--warn); }
+.snap-btn { position: relative; }
+.snap-dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 6px rgba(245, 158, 11, .8); }
 
 .topbar-tools { display: flex; align-items: center; gap: 0.45rem; margin-left: auto; }
 .topbar-tools .switch { margin: 0 0.3rem; }
@@ -1148,7 +1358,7 @@ onBeforeUnmount(() => {
   .wide-only { display: none !important; }
   .topbar { gap: 0.4rem; padding-left: 0.5rem; padding-right: 0.5rem; }
   .flow-title { font-size: 0.8rem; flex: 1 1 auto; }
-  .save-state { display: none; }
+  .save-state:not(.offline) { display: none; }
   .canvas-status { top: 8px; right: 8px; }
 }
 </style>
