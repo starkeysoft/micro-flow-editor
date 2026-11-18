@@ -64,4 +64,7 @@ export const api = {
   listUsers: () => request('GET', '/api/auth/users'),
   addUser: (body) => request('POST', '/api/auth/users', body),
   deleteUser: (id) => request('DELETE', `/api/auth/users/${id}`),
+  listTokens: () => request('GET', '/api/auth/tokens'),
+  createToken: (body) => request('POST', '/api/auth/tokens', body),
+  deleteToken: (id) => request('DELETE', `/api/auth/tokens/${id}`),
 };

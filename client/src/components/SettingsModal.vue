@@ -103,6 +103,43 @@
           </form>
         </section>
       </template>
+
+      <!-- MCP for AI agents -->
+      <section v-if="mcpEnabled" class="block">
+        <h3 class="label">AI agents (MCP)</h3>
+        <p class="field-hint">
+          Agents such as Claude Code can build, check and run flows through the MCP endpoint
+          <span class="mono">{{ mcpUrl }}</span>.
+          {{ session.auth_enabled
+            ? 'They sign in with an API token, which acts as your account.'
+            : 'While sign-in is off it is open to anyone who can reach this editor, like the rest of it.' }}
+        </p>
+        <div class="command">
+          <code class="mono">{{ mcpCommand }}</code>
+          <button class="button ghost small" type="button" @click="copy(mcpCommand)">Copy</button>
+        </div>
+
+        <template v-if="session.auth_enabled && session.user">
+          <div v-if="newToken" class="new-token" role="status">
+            <p class="field-hint">Copy the token "{{ newToken.name }}" now. It isn't shown again.</p>
+            <div class="command">
+              <code class="mono">{{ newToken.token }}</code>
+              <button class="button ghost small" type="button" @click="copy(newToken.token)">Copy</button>
+            </div>
+          </div>
+          <ul v-if="tokens.length" class="users">
+            <li v-for="t in tokens" :key="t.id">
+              <span class="mono">{{ t.name }}</span>
+              <span class="when">{{ t.hint }}… · {{ t.last_used_at ? `used ${ago(t.last_used_at)}` : 'never used' }}</span>
+              <button class="button ghost small icon danger" type="button" :aria-label="`Revoke ${t.name}`" @click="revokeToken(t)">✕</button>
+            </li>
+          </ul>
+          <form class="add-token" @submit.prevent="createToken">
+            <input v-model="tokenName" class="input" placeholder="token name, e.g. Claude Code" aria-label="New token name" maxlength="100" required />
+            <button class="button small" type="submit" :disabled="busy">Create API token</button>
+          </form>
+        </template>
+      </section>
     </div>
   </div>
 </template>
@@ -126,6 +163,59 @@ const users = ref([]);
 const form = reactive({ username: '', password: '', repeat: '' });
 const pw = reactive({ current: '', next: '', repeat: '' });
 const newUser = reactive({ username: '', password: '' });
+
+const mcpEnabled = ref(false);
+const tokens = ref([]);
+const tokenName = ref('');
+const newToken = ref(null);
+const mcpUrl = `${location.origin}/mcp`;
+const mcpCommand = computed(() => {
+  const base = `claude mcp add --transport http micro-flow ${mcpUrl}`;
+  if (!session.auth_enabled) return base;
+  return `${base} --header "Authorization: Bearer ${newToken.value?.token ?? '<API token>'}"`;
+});
+
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied', 'good', 1500);
+  } catch {
+    toast('Couldn\'t copy: select the text and copy it yourself.', 'warn');
+  }
+}
+
+async function loadTokens() {
+  if (!session.auth_enabled || !session.user) return;
+  try {
+    tokens.value = await api.listTokens();
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
+
+async function createToken() {
+  busy.value = true;
+  try {
+    newToken.value = await api.createToken({ name: tokenName.value });
+    tokenName.value = '';
+    await loadTokens();
+  } catch (e) {
+    toast(e.message, 'bad', 6000);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function revokeToken(token) {
+  if (!confirm(`Revoke the API token "${token.name}"? Agents using it lose access straight away.`)) return;
+  try {
+    await api.deleteToken(token.id);
+    if (newToken.value?.id === token.id) newToken.value = null;
+    await loadTokens();
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
+}
 
 const lockedText = computed(() => `Set by the AUTH_ENABLED environment variable on the server, so it can't be changed here.`);
 
@@ -153,6 +243,8 @@ async function toggle(event) {
     await api.disableAuth();
     await loadSession();
     users.value = [];
+    tokens.value = [];
+    newToken.value = null;
     toast('Sign-in is off', 'warn');
   } catch (e) {
     toast(e.message, 'bad', 6000);
@@ -179,6 +271,7 @@ async function enable() {
     await loadSession();
     cancelEnable();
     await loadUsers();
+    await loadTokens();
     toast(`Sign-in is on. You're signed in as ${session.user.username}.`, 'good', 5000);
   } catch (e) {
     error.value = e.message;
@@ -240,6 +333,8 @@ watch(() => session.auth_enabled, (on) => { if (!on) enabling.value = false; });
 onMounted(async () => {
   await loadSession().catch(() => {});
   loadUsers();
+  loadTokens();
+  api.meta().then((meta) => { mcpEnabled.value = Boolean(meta.mcp_enabled); }).catch(() => {});
 });
 </script>
 
@@ -272,7 +367,14 @@ onMounted(async () => {
 
 .add-user { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
 
+.command { display: flex; align-items: center; gap: 6px; margin-top: 0.6rem; padding: 0.4rem 0.4rem 0.4rem 0.7rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+.command code { flex: 1; min-width: 0; font-size: 0.74rem; overflow-wrap: anywhere; user-select: all; }
+.command .button { flex: none; }
+.new-token { margin-top: 0.8rem; padding: 0.7rem; border: 1px dashed var(--border-strong); border-radius: 10px; }
+.new-token .command { margin-top: 0.4rem; }
+.add-token { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 0.8rem; }
+
 @media (max-width: 520px) {
-  .add-user { grid-template-columns: 1fr; }
+  .add-user, .add-token { grid-template-columns: 1fr; }
 }
 </style>

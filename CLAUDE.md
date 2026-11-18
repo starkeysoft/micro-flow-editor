@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Micro-Flow Editor (`@ronaldroe/micro-flow-editor` on npm) is a visual, n8n-style drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.com/package/@ronaldroe/micro-flow) logic flows. A Vue 3 + Vue Flow SPA edits graphs. An Express 5 server compiles graphs into real micro-flow `Workflow` trees, runs them (manual, schedule and webhook triggers), streams progress over SSE, stores flows and executions through Sequelize, and offers an optional sign-in (off by default). A standalone runtime runs exported flows in other apps. The library itself lives in `/mnt/storage1/projects/micro-flow`; read its `CLAUDE.md` when behaviour depends on micro-flow internals.
+Micro-Flow Editor (`@ronaldroe/micro-flow-editor` on npm) is a visual, n8n-style drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.com/package/@ronaldroe/micro-flow) logic flows. A Vue 3 + Vue Flow SPA edits graphs. An Express 5 server compiles graphs into real micro-flow `Workflow` trees, runs them (manual, schedule and webhook triggers), streams progress over SSE, stores flows and executions through Sequelize, offers an optional sign-in (off by default), and serves an MCP endpoint (`/mcp`) for AI agents. A standalone runtime runs exported flows in other apps. The library itself lives in `/mnt/storage1/projects/micro-flow`; read its `CLAUDE.md` when behaviour depends on micro-flow internals.
 
 > **Terminology:** say "logic flow" (or "flow") for what users build. Reserve "workflow" / `Workflow` for the micro-flow class.
 
@@ -19,7 +19,7 @@ npm start            # node server/index.js on PORT (default 8090)
 npm run dev          # nodemon: API server, restarts on server/ and shared/ changes
 npm run dev:client   # Vite dev server on :5173, proxies /api and /webhook to :PORT
 npm test             # node --test test/*.test.js
-node bin/micro-flow-editor.js user <list|add|passwd|remove> [name]   # manage sign-in accounts
+node bin/micro-flow-editor.js user <list|add|passwd|remove|token> [name]   # sign-in accounts, API tokens
 docker compose up -d --build                     # SQLite in a volume, http://localhost:8090
 docker compose --profile postgres up -d --build  # + PostgreSQL (set DATABASE_URL)
 docker compose --profile mysql up -d --build     # + MySQL (set DATABASE_URL)
@@ -39,23 +39,25 @@ server/
   config.js    env -> config (read once at import time)
   db.js        Sequelize models Flow + Snapshot + Execution + ArchivedFlow (JSON stored as
                TEXT/LONGTEXT), Setting
-               (getSetting/putSetting), User, Session; initDatabase()
+               (getSetting/putSetting), User, Session, ApiToken; initDatabase()
   drafts.js    autosave write-behind cache (MemoryStore, or RedisStore with REDIS_URL) + flush worker
                (startDraftWorker/stopDraftWorker, saveDraft, flush, flushAll, discard); snapshots
                (createSnapshot + pruning, latestSnapshot, hasUnsnapshottedChanges, liveVersion)
   auth.js      optional sign-in: isAuthEnabled/isAuthLocked, scrypt passwords, DB sessions (SHA-256 of
                the mfe_session cookie token), requireAuth middleware, /api/auth/* router,
                bootstrapAdmin() (bad ADMIN_* values only warn), startSessionCleanup(), login/enable
-               rate limit, normalizeUsername() (usernames stored lowercase)
-  users-cli.js `micro-flow-editor user list|add|passwd|remove` (runUsersCli)
+               rate limit, normalizeUsername() (usernames stored lowercase), API tokens
+               (createApiToken, Bearer mfe_… in requireAuth, /api/auth/tokens)
+  users-cli.js `micro-flow-editor user list|add|passwd|remove|token` (runUsersCli)
   server.js    start(): DB, auth setting + admin bootstrap, startDraftWorker(), markInterrupted(),
                registerAll(), Express app
-               (parseTrustProxy(), webhooks, /api auth router, requireAuth, API), static dist/;
+               (parseTrustProxy(), webhooks, /api auth router, requireAuth, API, /mcp), static dist/;
                close() flushes drafts (stopDraftWorker) before sequelize.close()
   index.js     entry for npm start / CLI / Docker (signal handling)
-  api/         flows.js (REST + cleanGraph, draft, snapshot and archive routes), stream.js (SSE),
-               webhooks.js
-               (/webhook/*, runs liveVersion())
+  api/         flows.js (REST + cleanGraph, draft, snapshot and archive routes; exports load(),
+               full(), createFlow(), updateFlow(), archiveFlow() for mcp.js), stream.js (SSE),
+               webhooks.js (/webhook/*, runs liveVersion()),
+               mcp.js (/mcp: stateless Streamable HTTP MCP server, one McpServer per POST)
   engine/
     compile.js   validate() + compileGraph(): graph -> nested micro-flow Workflows; DelayStep subclass
     actions.js   ACTIONS[type](input, config, ctx, step): what trigger/action nodes do; SSRF guard
@@ -88,7 +90,8 @@ Key ideas:
 - **Autosave** (`server/drafts.js`, docs/server.md#autosave): the editor sends its whole document to `PUT`/`POST /api/flows/:id/draft` ~400 ms after each change; that writes only the cache. A `setInterval` worker (`FLUSH_INTERVAL_MS`) flushes dirty drafts as an `UPDATE` of the flow row (never a new row), then `settle()`s with compare-and-delete on the draft's unique `version` (a Lua script in Redis) so a write that arrived during the flush stays dirty. `flush(id)` is coalesced per flow (`in_flight`). **Reads flush first:** `load()` in `api/flows.js` flushes the flow, `GET /api/flows` calls `flushAll()`; `close()` flushes everything before the DB closes. Any new route that reads a flow row must go through `load()` or call `flush()`. The `redis` package is an optionalDependency, dynamically imported only when `REDIS_URL` is set.
 - **Snapshots and what goes live:** the `flows` row is the autosaved working copy; Save (`POST /api/flows/:id/snapshots`) copies it into `snapshots`. Active flows' webhooks and schedules use `liveVersion(flow)` = the latest snapshot (or the row when there is none), never the draft, so half-finished edits never go live. Manual runs still use the graph the editor sends. Re-register triggers (`applyTriggers` -> `registerLive`) whenever the latest snapshot can change: snapshot create/delete, activation (`PUT {active:true}` makes an `Activated` snapshot if `hasUnsnapshottedChanges`), and `PUT` with a `graph` (discards the draft, makes a `Saved through the API` snapshot).
 - **Archiving** (`POST /api/flows/:id/archive`, `/api/archive/*` in `api/flows.js`, docs/api.md#archive): archive goes through `load()` (flush), `unregister()`s triggers, `stopFlowRuns()`, saves an `Archived` snapshot if there is none or `hasUnsnapshottedChanges`, then in one transaction copies the latest snapshot into `archived_flows` (row id = flow id) and deletes the flow's executions, all its snapshots and the flow row; then `discard()`s the draft. Unarchive (409 if the id is taken) recreates the flow with the same id, `active: false`, plus that snapshot (same id/label/created_by) in one transaction, and restores both `createdAt`s with `queryInterface.bulkUpdate(..., model.getAttributes())` (whole seconds on MySQL). The editor shows an "is archived" message for an archived flow's URL.
-- **Sign-in** (`server/auth.js`, docs/server.md#sign-in): `isAuthEnabled()` is `config.auth_enabled_env` (from `AUTH_ENABLED`; `null` when unset) if set, otherwise the `auth_enabled` row of the `settings` table (default off), loaded at startup and changed by `/api/auth/enable|disable`. `isAuthLocked()` is true when `AUTH_ENABLED` is set. In `server.js` the auth router is mounted on `/api` before `requireAuth`, so `/api/auth/*` stays reachable and every other `/api` route (including `/api/meta` and the SSE stream) needs a session while sign-in is on. `/webhook/*` is mounted before both and is always public. The cross-site check compares `Origin` with `req.host` (follows `X-Forwarded-Host` when `TRUST_PROXY` is set). The Docker HEALTHCHECK probes the public `/api/auth/session`, not `/api/meta`. When sign-in is off, `requireAuth` is a no-op. No roles: every user can do everything.
+- **MCP** (`server/api/mcp.js`, docs/mcp.md): mounted in `server.js` after `/api` as `express.json` + `requireAuth` + the router, unless `MCP_ENABLED=false`. Tools reuse the helpers exported by `api/flows.js` (never re-implement flow writes there), so autosave/snapshot rules hold: `update_flow` = `updateFlow()` with label `Saved through MCP`. `updateFlow()` emits `flow_changed` (`content`, `source`) on the flow's bus channel; `EditorView` reloads on it when it has no unsent edits. `/mcp` checks `Origin` even with sign-in off (DNS rebinding). A new tool needs a test in `test/mcp.test.js` and a row in docs/mcp.md.
+- **Sign-in** (`server/auth.js`, docs/server.md#sign-in): `isAuthEnabled()` is `config.auth_enabled_env` (from `AUTH_ENABLED`; `null` when unset) if set, otherwise the `auth_enabled` row of the `settings` table (default off), loaded at startup and changed by `/api/auth/enable|disable`. `isAuthLocked()` is true when `AUTH_ENABLED` is set. In `server.js` the auth router is mounted on `/api` before `requireAuth`, so `/api/auth/*` stays reachable and every other `/api` route (including `/api/meta` and the SSE stream) needs a session while sign-in is on. `/webhook/*` is mounted before both and is always public. The cross-site check compares `Origin` with `req.host` (follows `X-Forwarded-Host` when `TRUST_PROXY` is set). The Docker HEALTHCHECK probes the public `/api/auth/session`, not `/api/meta`. When sign-in is off, `requireAuth` is a no-op. With it on, `Authorization: Bearer mfe_…` (an `api_tokens` row, SHA-256 stored) is checked instead of the cookie and skips the Origin check; token management routes need a cookie session. No roles: every user can do everything.
 
 ## Conventions
 
@@ -110,11 +113,11 @@ Key ideas:
 
 ## Testing
 
-`node:test` + `node:assert/strict`, flat `test/*.test.js`. `test/engine.test.js` runs graphs through the real compiler and runner against in-memory SQLite (`DATABASE_URL=sqlite::memory:` set before importing server modules). `test/runtime.test.js` covers the standalone runtime and checks that every template compiles. `test/server.test.js` covers `startServer()`. Sign-in: `test/auth.test.js` (editor toggle, users, passwords, rate limit), `test/auth-env.test.js` (`AUTH_ENABLED=true`) and `test/auth-cli.test.js` (the `user` CLI and `ADMIN_USERNAME`), each in its own process because config is read once at import; `test/auth-helpers.js` is a cookie-keeping fetch client, not a test file. Archive: `test/archive.test.js` (archive keeps only the latest snapshot, pre-archive `Archived` snapshot, unarchive with the same id and createdAt, permanent delete). Autosave/snapshots: `test/drafts.test.js` (worker updates the same row, reads flush, webhooks run the snapshot not the draft, activation snapshot, pruning, export, deletion with the flow, flush on `SIGTERM`); `test/drafts-redis.test.js` runs only when `TEST_REDIS_URL` points at a Redis server (skipped otherwise). Tests that call external APIs are not allowed; use `manual`, `set`, `transform`, `chaos` (with `fail_pct` 0 or 100) etc.
+`node:test` + `node:assert/strict`, flat `test/*.test.js`. `test/engine.test.js` runs graphs through the real compiler and runner against in-memory SQLite (`DATABASE_URL=sqlite::memory:` set before importing server modules). `test/runtime.test.js` covers the standalone runtime and checks that every template compiles. `test/server.test.js` covers `startServer()`. Sign-in: `test/auth.test.js` (editor toggle, users, passwords, rate limit), `test/auth-env.test.js` (`AUTH_ENABLED=true`) and `test/auth-cli.test.js` (the `user` CLI and `ADMIN_USERNAME`), each in its own process because config is read once at import; `test/auth-helpers.js` is a cookie-keeping fetch client, not a test file. MCP: `test/mcp.test.js` (official SDK client over HTTP: every tool, `flow_changed`, webhooks after `set_flow_active`, Origin/GET refusals, API tokens with sign-in on). Archive: `test/archive.test.js` (archive keeps only the latest snapshot, pre-archive `Archived` snapshot, unarchive with the same id and createdAt, permanent delete). Autosave/snapshots: `test/drafts.test.js` (worker updates the same row, reads flush, webhooks run the snapshot not the draft, activation snapshot, pruning, export, deletion with the flow, flush on `SIGTERM`); `test/drafts-redis.test.js` runs only when `TEST_REDIS_URL` points at a Redis server (skipped otherwise). Tests that call external APIs are not allowed; use `manual`, `set`, `transform`, `chaos` (with `fail_pct` 0 or 100) etc.
 
 ## Documentation
 
-Every change must update the docs that describe it: `README.md`, the relevant pages in `docs/` (index, editor, nodes, expressions, triggers, compilation, runtime, server, api, data-model, examples), `CHANGELOG.md`, and this file when architecture or commands change. Docs must match the code exactly; if code and docs disagree, fix whichever is wrong in the same change.
+Every change must update the docs that describe it: `README.md`, the relevant pages in `docs/` (index, editor, nodes, expressions, triggers, compilation, runtime, server, api, mcp, data-model, examples), `CHANGELOG.md`, and this file when architecture or commands change. Docs must match the code exactly; if code and docs disagree, fix whichever is wrong in the same change.
 
 ## Commits
 

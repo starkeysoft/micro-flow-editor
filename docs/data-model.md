@@ -11,6 +11,7 @@ What the editor stores and the JSON formats it uses. The tables are defined in `
 - [Settings](#settings)
 - [Users](#users)
 - [Sessions](#sessions)
+- [API Tokens](#api-tokens)
 - [Graph](#graph)
 - [Export Format](#export-format)
 - [Node Runs](#node-runs)
@@ -19,7 +20,7 @@ What the editor stores and the JSON formats it uses. The tables are defined in `
 
 ## Tables
 
-There are seven tables, created by Sequelize on startup: `flows`, `snapshots` and `executions` hold your logic flows, their saved versions and their runs; `archived_flows` holds archived flows; `settings`, `users` and `sessions` belong to the optional [sign-in](server.md#sign-in). JSON columns are stored as text (`LONGTEXT` on MySQL and MariaDB, `TEXT` elsewhere) and parsed when read. They have no SQL column default, because MySQL doesn't allow defaults on `TEXT` columns. A Sequelize `beforeValidate` hook fills in missing values instead (`{ nodes: [], edges: [] }` for graphs, `{ exit_on_error: true }` for options (in `flows`, `snapshots` and `archived_flows`), `{}` for `node_runs`, `[]` for `log` and `outputs`), so rows written outside the app must supply them. Deleting a flow deletes its snapshots and executions, archiving one deletes its executions and all its snapshots (after copying the latest into `archived_flows`), and deleting a user deletes their sessions.
+There are eight tables, created by Sequelize on startup: `flows`, `snapshots` and `executions` hold your logic flows, their saved versions and their runs; `archived_flows` holds archived flows; `settings`, `users`, `sessions` and `api_tokens` belong to the optional [sign-in](server.md#sign-in). JSON columns are stored as text (`LONGTEXT` on MySQL and MariaDB, `TEXT` elsewhere) and parsed when read. They have no SQL column default, because MySQL doesn't allow defaults on `TEXT` columns. A Sequelize `beforeValidate` hook fills in missing values instead (`{ nodes: [], edges: [] }` for graphs, `{ exit_on_error: true }` for options (in `flows`, `snapshots` and `archived_flows`), `{}` for `node_runs`, `[]` for `log` and `outputs`), so rows written outside the app must supply them. Deleting a flow deletes its snapshots and executions, archiving one deletes its executions and all its snapshots (after copying the latest into `archived_flows`), and deleting a user deletes their sessions and API tokens.
 
 ## Flows
 
@@ -133,6 +134,20 @@ Table `sessions`, one row per signed-in browser:
 | `createdAt`, `updatedAt` | date | Set by Sequelize. |
 
 Expired rows are deleted at startup and every hour.
+
+## API Tokens
+
+Table `api_tokens`, tokens for scripts and [MCP clients](mcp.md#sign-in-and-api-tokens):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key. |
+| `token_hash` | string (64), unique | The hex SHA-256 of the token. The token itself is never stored. |
+| `name` | string (100) | What it is for, e.g. `Claude Code`. |
+| `hint` | string (16) | The token's first 10 characters (`mfe_` and 6 more), shown in Settings. |
+| `user_id` | UUID | The user it acts as. Deleting the user deletes their tokens. |
+| `last_used_at` | date | Last request with it (written at most once a minute), or `null`. |
+| `createdAt`, `updatedAt` | date | Set by Sequelize. The API returns `createdAt` as `created_at`. |
 
 ## Graph
 

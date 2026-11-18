@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CLI: starts the editor. Flags override the matching environment variables.
 //   micro-flow-editor [--port 8090] [--database-url <url>] [--sqlite <file>] [--block-private-networks] [--auth]
-//   micro-flow-editor [database flags] user <list|add|passwd|remove> [username]
+//   micro-flow-editor [database flags] user <list|add|passwd|remove|token> [username]
 const args = process.argv.slice(2);
 let subcommand = null;
 const flags = {
@@ -34,8 +34,9 @@ for (let i = 0; i < args.length; i++) {
                              it, sign-in is switched in the editor (default off)
   -h, --help                 show this help
 
-  user <list|add|passwd|remove> [username]
-                             manage sign-in accounts (micro-flow-editor user --help)`);
+  user <list|add|passwd|remove|token> [username]
+                             manage sign-in accounts and API tokens
+                             (micro-flow-editor user --help)`);
     process.exit(0);
   }
   if (flag === '--block-private-networks') {

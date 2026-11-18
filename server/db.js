@@ -143,6 +143,21 @@ export const Session = sequelize.define('Session', {
 User.hasMany(Session, { foreignKey: { name: 'user_id', allowNull: false }, onDelete: 'CASCADE' });
 Session.belongsTo(User, { foreignKey: 'user_id' });
 
+// API tokens for scripts and MCP clients (Authorization: Bearer mfe_…). Like
+// sessions, only the token's SHA-256 is stored. They act as their user and
+// don't expire; deleting one (or the user) revokes it.
+export const ApiToken = sequelize.define('ApiToken', {
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  token_hash: { type: DataTypes.STRING(64), allowNull: false, unique: true },
+  name: { type: DataTypes.STRING(100), allowNull: false },
+  // The first characters of the token, so people can tell tokens apart.
+  hint: { type: DataTypes.STRING(16), allowNull: false },
+  last_used_at: { type: DataTypes.DATE, allowNull: true },
+}, { tableName: 'api_tokens' });
+
+User.hasMany(ApiToken, { foreignKey: { name: 'user_id', allowNull: false }, onDelete: 'CASCADE' });
+ApiToken.belongsTo(User, { foreignKey: 'user_id' });
+
 function fillJsonDefaults(model, fallbacks) {
   model.addHook('beforeValidate', (instance) => {
     for (const [column, fallback] of Object.entries(fallbacks)) {

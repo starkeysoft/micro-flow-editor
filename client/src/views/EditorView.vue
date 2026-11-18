@@ -960,7 +960,33 @@ async function stop() {
 // ── Live updates over SSE ──
 let source = null;
 
+// The flow was changed through the REST API or MCP (or switched on/off in
+// another tab). Reload it unless there are edits here that aren't sent yet.
+async function onFlowChanged(msg) {
+  if (!msg.content) {
+    const flow = await api.getFlow(props.id).catch(() => null);
+    if (!flow) return;
+    active.value = flow.active;
+    snapshotDirty.value = flow.snapshot.changed_since;
+    latestSnapshot.value = flow.snapshot.latest;
+    loadSnapshots();
+    return;
+  }
+  const by = msg.source === 'mcp' ? 'an AI agent (MCP)' : 'the API';
+  if (dirty.value || inFlight) {
+    toast(`This flow was just changed by ${by}. Your next edit here replaces that change; reload the page to see it instead.`, 'warn', 10000);
+    return;
+  }
+  await load();
+  loadSnapshots();
+  toast(`This flow was changed by ${by}; showing the new version.`, 'info', 5000);
+}
+
 function handleMessage(msg) {
+  if (msg.type === 'flow_changed') {
+    onFlowChanged(msg);
+    return;
+  }
   if (msg.type === 'execution_started') {
     executions.value = [msg.execution, ...executions.value.filter((e) => e.id !== msg.execution.id)];
     // Follow every new run (manual, webhook or schedule) unless an old one is open.

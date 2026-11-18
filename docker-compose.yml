@@ -25,6 +25,8 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # MCP endpoint for AI agents at /mcp (same sign-in as the editor).
+      MCP_ENABLED: ${MCP_ENABLED:-true}
     volumes:
       - micro-flow-editor-data:/app/data
     restart: unless-stopped

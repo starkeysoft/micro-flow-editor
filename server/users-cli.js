@@ -3,15 +3,18 @@
 // Passwords come from a hidden prompt, or from stdin when it isn't a terminal
 // (never from the command line, where other users could see them).
 import readline from 'readline';
-import { initDatabase, sequelize, User, Session } from './db.js';
-import { createUser, setPassword, checkUsername, AuthError } from './auth.js';
+import { initDatabase, sequelize, User, Session, ApiToken } from './db.js';
+import { createUser, setPassword, checkUsername, createApiToken, AuthError } from './auth.js';
 
 const USAGE = `Usage: micro-flow-editor user <command>
 
   user list                 list accounts
   user add <username>       create an account (asks for a password)
   user passwd <username>    set a new password and sign the user out everywhere
-  user remove <username>    delete an account
+  user remove <username>    delete an account (and its API tokens)
+  user token <username> [name]
+                            create an API token for scripts and MCP clients
+                            (printed once; revoke it in the editor's Settings)
 
 Passwords are read from a hidden prompt, or from stdin when piped:
   printf 'new-password\\n' | micro-flow-editor user passwd admin`;
@@ -84,8 +87,16 @@ export async function runUsersCli(args) {
       case 'remove': {
         const user = await findUser(username);
         await Session.destroy({ where: { user_id: user.id } });
+        await ApiToken.destroy({ where: { user_id: user.id } });
         await user.destroy();
         console.log(`Removed "${user.username}".`);
+        return 0;
+      }
+      case 'token': {
+        const user = await findUser(username);
+        const created = await createApiToken(user, args[2] || 'CLI token');
+        console.log(created.token);
+        console.error(`Created the API token "${created.name}" for "${user.username}". It isn't shown again.`);
         return 0;
       }
       default:

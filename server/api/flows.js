@@ -2,7 +2,7 @@
 import express from 'express';
 import { sequelize, Flow, Execution, Snapshot, ArchivedFlow } from '../db.js';
 import { NODE_TYPES, withDefaults } from '../../shared/nodes.js';
-import { runFlow, stopRun, stopFlowRuns, preview, activeRuns, BusyError } from '../engine/runner.js';
+import { runFlow, stopRun, stopFlowRuns, preview, activeRuns, BusyError, bus } from '../engine/runner.js';
 import { registerLive, unregister, triggerSummary } from '../engine/triggers.js';
 import {
   saveDraft, flush, flushAll, discard, createSnapshot, latestSnapshot, hasUnsnapshottedChanges,
@@ -13,7 +13,7 @@ export const router = express.Router();
 
 const MAX_NODES = 500;
 
-class InputError extends Error {}
+export class InputError extends Error {}
 
 const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => String(v ?? '').slice(0, max);
@@ -57,9 +57,9 @@ export function cleanGraph(graph) {
   return { nodes: clean_nodes, edges: clean_edges, ...(viewport ? { viewport } : {}) };
 }
 
-const cleanOptions = (options) => ({ exit_on_error: options?.exit_on_error !== false });
+export const cleanOptions = (options) => ({ exit_on_error: options?.exit_on_error !== false });
 
-function summary(flow, last) {
+export function summary(flow, last) {
   return {
     id: flow.id,
     name: flow.name,
@@ -73,7 +73,7 @@ function summary(flow, last) {
   };
 }
 
-const lastExecution = (flow_id) => Execution.findOne({
+export const lastExecution = (flow_id) => Execution.findOne({
   where: { flow_id },
   order: [['started_at', 'DESC']],
   attributes: ['id', 'status', 'started_at', 'mode'],
@@ -88,7 +88,7 @@ const snapshotSummary = (s) => ({
   node_count: s.graph.nodes.length,
 });
 
-const full = async (flow) => {
+export const full = async (flow) => {
   const latest = await latestSnapshot(flow.id);
   return {
     ...summary(flow, await lastExecution(flow.id)),
@@ -105,10 +105,11 @@ const full = async (flow) => {
 };
 
 // Loads a flow, writing its pending autosave draft first so every route sees
-// the latest edits.
-async function load(req) {
-  await flush(req.params.id);
-  const flow = await Flow.findByPk(req.params.id);
+// the latest edits. Takes a request (params.id) or an id.
+export async function load(req_or_id) {
+  const id = String(typeof req_or_id === 'string' ? req_or_id : req_or_id.params.id);
+  await flush(id);
+  const flow = await Flow.findByPk(id);
   if (!flow) {
     const error = new InputError('flow not found');
     error.status = 404;
@@ -137,7 +138,7 @@ const handle = (fn) => async (req, res) => {
 
 // Starting a flow's triggers can fail (bad cron, webhook clash). The flow is
 // then switched off, and the error says so; whatever was being saved stays saved.
-async function applyTriggers(flow) {
+export async function applyTriggers(flow) {
   try {
     await registerLive(flow);
   } catch (error) {
@@ -154,29 +155,34 @@ router.get('/flows', handle(async (req, res) => {
   res.json(flows.map((f, i) => summary(f, lasts[i])));
 }));
 
-router.post('/flows', handle(async (req, res) => {
-  const body = req.body ?? {};
+// Creates a flow (switched off). Without a graph it gets one Manual Trigger.
+export async function createFlow(body = {}) {
   const graph = body.graph ? cleanGraph(body.graph) : {
     nodes: [withDefaults({ id: 'trigger', type: 'manual', name: 'Start', x: 0, y: 0 })],
     edges: [],
   };
-  const flow = await Flow.create({
+  return Flow.create({
     name: str(body.name, 200).trim() || 'Untitled flow',
     description: str(body.description, 1000),
     graph,
     options: cleanOptions(body.options),
     active: false,
   });
-  res.status(201).json(await full(flow));
+}
+
+router.post('/flows', handle(async (req, res) => {
+  res.status(201).json(await full(await createFlow(req.body ?? {})));
 }));
 
 router.get('/flows/:id', handle(async (req, res) => {
   res.json(await full(await load(req)));
 }));
 
-router.put('/flows/:id', handle(async (req, res) => {
-  const flow = await load(req);
-  const body = req.body ?? {};
+// Changes a loaded flow: name, description, graph, options, active. A graph
+// or options is a save (snapshot `label`); turning a flow on snapshots edits
+// that aren't in a snapshot yet. Then the triggers switch to the latest snapshot.
+// Editors open on the flow hear about it (`flow_changed` on its SSE stream).
+export async function updateFlow(flow, body = {}, { label = 'Saved through the API', created_by = null, source = 'api' } = {}) {
   const changes = {};
   if (body.name !== undefined) changes.name = str(body.name, 200).trim() || 'Untitled flow';
   if (body.description !== undefined) changes.description = str(body.description, 1000);
@@ -191,9 +197,19 @@ router.put('/flows/:id', handle(async (req, res) => {
   // it isn't in a snapshot yet. Either way the triggers run that snapshot.
   const saved_content = changes.graph || changes.options;
   if (saved_content || (activating && await hasUnsnapshottedChanges(flow))) {
-    await createSnapshot(flow, { label: saved_content ? 'Saved through the API' : 'Activated', created_by: req.user?.username ?? null });
+    await createSnapshot(flow, { label: saved_content ? label : 'Activated', created_by });
   }
-  await applyTriggers(flow);
+  try {
+    await applyTriggers(flow);
+  } finally {
+    const content = Boolean(changes.graph || changes.options || changes.name !== undefined || changes.description !== undefined);
+    if (content || changes.active !== undefined) bus.emit(`flow:${flow.id}`, { type: 'flow_changed', content, source });
+  }
+  return flow;
+}
+
+router.put('/flows/:id', handle(async (req, res) => {
+  const flow = await updateFlow(await load(req), req.body ?? {}, { created_by: req.user?.username ?? null });
   res.json(await full(flow));
 }));
 
@@ -379,9 +395,8 @@ const restoreCreatedAt = (model, id, date, transaction) => (date
   ? sequelize.getQueryInterface().bulkUpdate(model.getTableName(), { createdAt: date }, { id }, { transaction }, model.getAttributes())
   : null);
 
-router.post('/flows/:id/archive', handle(async (req, res) => {
-  const flow = await load(req); // writes any pending autosave first
-  const user = req.user?.username ?? null;
+// Archives a flow loaded with load() (which writes any pending autosave first).
+export async function archiveFlow(flow, user = null) {
   unregister(flow.id);
   stopFlowRuns(flow.id);
   let latest = await latestSnapshot(flow.id);
@@ -409,7 +424,11 @@ router.post('/flows/:id/archive', handle(async (req, res) => {
     return row;
   });
   await discard(flow.id);
-  res.json(archivedSummary(archived));
+  return archivedSummary(archived);
+}
+
+router.post('/flows/:id/archive', handle(async (req, res) => {
+  res.json(await archiveFlow(await load(req), req.user?.username ?? null));
 }));
 
 router.get('/archive', handle(async (req, res) => {

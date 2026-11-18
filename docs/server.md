@@ -11,6 +11,7 @@ The editor's server serves the Vue client, the [REST API](api.md) and `/webhook/
 - [Databases](#databases)
 - [Autosave](#autosave)
 - [Sign-in](#sign-in)
+- [MCP](#mcp)
 - [SSRF Guard](#ssrf-guard)
 - [Limits](#limits)
 - [Startup and Shutdown](#startup-and-shutdown)
@@ -94,7 +95,7 @@ Every option is optional and overrides the matching environment variable (see [E
 
 ```bash
 micro-flow-editor [options]
-micro-flow-editor [database flags] user <list|add|passwd|remove> [username]
+micro-flow-editor [database flags] user <list|add|passwd|remove|token> [username]
 ```
 
 | Flag | Environment variable | Description |
@@ -117,7 +118,8 @@ Flags can also be written as `--port=9000`. Only the first `=` splits the flag f
 | `user list` | Lists accounts and when each last signed in. |
 | `user add <username>` | Creates an account. |
 | `user passwd <username>` | Sets a new password and signs the user out everywhere (deletes their sessions). |
-| `user remove <username>` | Deletes the account and its sessions. |
+| `user remove <username>` | Deletes the account, its sessions and its API tokens. |
+| `user token <username> [name]` | Creates an [API token](mcp.md#sign-in-and-api-tokens) for the user (named `name`, default `CLI token`) and prints it on stdout (a note goes to stderr). It isn't shown again. Revoke it in the editor's Settings. |
 | `user`, `user --help`, `user -h` | Prints the usage. |
 
 Passwords are never taken from the command line, where other users could see them. In a terminal you are asked twice at a hidden prompt; otherwise the first line of stdin is read:
@@ -150,7 +152,7 @@ docker compose --profile redis up -d --build       # also starts Redis 7.4 (set 
 
 Profiles can be combined (`--profile postgres --profile redis`). The `redis` service (`redis:7.4-alpine`) runs with `--appendonly yes` and keeps its data in the `micro-flow-editor-redis` volume, so pending edits also survive a Redis restart. Starting the profile isn't enough on its own: the editor only uses Redis when `REDIS_URL` is set.
 
-Compose passes `DATABASE_URL`, `BLOCK_PRIVATE_NETWORKS`, `MAX_CONCURRENT_RUNS`, `MAX_LOOP_ITERATIONS`, `MAX_EXECUTIONS_PER_FLOW`, `REDIS_URL`, `FLUSH_INTERVAL_MS`, `MAX_SNAPSHOTS_PER_FLOW`, `AUTH_ENABLED`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_TTL_HOURS` and `TRUST_PROXY` through from your shell or `.env`, and maps `HOST_PORT` (default 8090) to the container's port 8090. `SQLITE_PATH` and `DB_LOGGING` are not passed through. The optional databases use the user, password and database name `flow`, and keep their data in the `micro-flow-editor-postgres` and `micro-flow-editor-mysql` volumes.
+Compose passes `DATABASE_URL`, `BLOCK_PRIVATE_NETWORKS`, `MAX_CONCURRENT_RUNS`, `MAX_LOOP_ITERATIONS`, `MAX_EXECUTIONS_PER_FLOW`, `REDIS_URL`, `FLUSH_INTERVAL_MS`, `MAX_SNAPSHOTS_PER_FLOW`, `AUTH_ENABLED`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_TTL_HOURS`, `TRUST_PROXY` and `MCP_ENABLED` through from your shell or `.env`, and maps `HOST_PORT` (default 8090) to the container's port 8090. `SQLITE_PATH` and `DB_LOGGING` are not passed through. The optional databases use the user, password and database name `flow`, and keep their data in the `micro-flow-editor-postgres` and `micro-flow-editor-mysql` volumes.
 
 The image copies the source at build time, so rebuild (`--build`) after changing code.
 
@@ -177,6 +179,7 @@ The image copies the source at build time, so rebuild (`--build`) after changing
 | `ADMIN_PASSWORD` | *(empty)* | Password for `ADMIN_USERNAME` (8–256 characters). |
 | `SESSION_TTL_HOURS` | `168` | How long a sign-in lasts (7 days). Sessions in use are renewed. |
 | `TRUST_PROXY` | *(empty)* | Behind a reverse proxy: `true`, a hop count, or addresses/subnets (Express `trust proxy`), so client IPs, HTTPS and the host come from `X-Forwarded-*`. Empty, `false`, `no`, `off` or `0` means no proxy is trusted. See [Behind a Reverse Proxy](#behind-a-reverse-proxy). |
+| `MCP_ENABLED` | `true` | Serves the [MCP endpoint](#mcp) at `/mcp`. Any value other than `1`, `true`, `yes` or `on` (when set) turns it off. |
 
 Booleans accept `1`, `true`, `yes` or `on` (any case); any other non-empty value means `false` (so `AUTH_ENABLED=no` forces sign-in off). The limit settings (`MAX_CONCURRENT_RUNS`, `MAX_LOOP_ITERATIONS`, `MAX_EXECUTIONS_PER_FLOW`), `FLUSH_INTERVAL_MS` and `SESSION_TTL_HOURS` fall back to their default when they are empty, `0` or not a number. `MAX_SNAPSHOTS_PER_FLOW` falls back to `100` only when it is unset or empty; `0` (or anything that isn't a positive number) keeps every snapshot. `PORT` falls back to 8090 when it is empty or not a number. Copy `.env.example` to `.env` to set them. `npm start` doesn't read `.env` by itself, so export the variables or use a tool that loads it. Docker Compose reads `.env` for its variable substitution.
 
@@ -251,7 +254,7 @@ The editor can ask for a username and password. It is **off by default**. The co
 
 When it is on:
 
-- every `/api` route needs a signed-in user, except `/api/auth/*`. Others answer `401 { "error": "sign in first", "auth_required": true }` (see [REST API: Sign-in](api.md#sign-in)). That includes `GET /api/meta` and the live event stream;
+- every `/api` route and `/mcp` need a signed-in user (a session cookie or an [API token](mcp.md#sign-in-and-api-tokens)), except `/api/auth/*`. Others answer `401 { "error": "sign in first", "auth_required": true }` (see [REST API: Sign-in](api.md#sign-in)). That includes `GET /api/meta` and the live event stream;
 - **`/webhook/*` stays public**, so outside callers still reach Webhook Triggers. Schedules keep running too;
 - the editor sends you to a login page (see [Using the Editor: Signing In](editor.md#signing-in)).
 
@@ -283,6 +286,10 @@ More accounts are added in the Settings dialog, with `POST /api/auth/users` or w
 - Expired sessions are deleted at startup and every hour after.
 - **Sign out** deletes the session. Changing your password signs out your **other** sessions. `user passwd` and deleting an account sign that user out everywhere.
 - Sessions live in the database, so they survive restarts and are shared by every server process that uses it.
+
+### API Tokens
+
+Scripts and [MCP clients](mcp.md) sign in with an API token instead of a cookie: `Authorization: Bearer mfe_…`. A token is `mfe_` plus 32 random bytes (base64url); the `api_tokens` table stores only its SHA-256, its name, its first 10 characters and when it was last used (updated at most once a minute). A request with an `Authorization: Bearer` header is checked against the tokens only (a wrong one gets `401 { "error": "invalid API token", "auth_required": true }`, even with a valid cookie), and skips the cross-site check below, since browsers never add that header on their own. Tokens don't expire and survive password changes; revoke them in Settings, and deleting a user (in Settings or with `user remove`) revokes theirs. Creating, listing and revoking tokens needs a browser session (see [REST API: API Tokens](api.md#api-tokens)), or the [`user token`](#the-user-command) command.
 
 ### Cross-site Requests
 
@@ -318,6 +325,10 @@ docker compose exec micro-flow-editor node bin/micro-flow-editor.js user passwd 
 ```
 
 `user add <name>` creates a new account the same way. As a last resort, start the server with `AUTH_ENABLED=false` to turn sign-in off. Removing the last account while sign-in is on puts the login page back into "create the first account" mode.
+
+## MCP
+
+The server serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` (Streamable HTTP, stateless) for AI agents, unless `MCP_ENABLED=false`. It needs the same sign-in as `/api`, and refuses requests whose `Origin` names another host even while sign-in is off. See [MCP for AI Agents](mcp.md) for connecting clients and the tools.
 
 ## SSRF Guard
 
@@ -357,7 +368,7 @@ On startup the server:
 4. marks executions still `running` from a previous process as `error` ("interrupted: the server restarted during this run");
 5. registers the schedules and webhooks of every active flow, from each flow's latest snapshot;
 6. deletes expired sessions (and again every hour);
-7. starts listening, and logs `micro-flow-editor running → http://localhost:<port> (database: <dialect>, autosave cache: memory|redis, sign-in on|off)`. With sign-in on, no `ADMIN_USERNAME` and no accounts, it also logs `No accounts yet: the first person to open the editor creates one.`
+7. starts listening, and logs `micro-flow-editor running → http://localhost:<port> (database: <dialect>, autosave cache: memory|redis, sign-in on|off, MCP at /mcp|MCP off)`. With sign-in on, no `ADMIN_USERNAME` and no accounts, it also logs `No accounts yet: the first person to open the editor creates one.`
 
 It also sets micro-flow's `log_suppress` flag, so micro-flow events aren't printed to the console.
 
@@ -365,7 +376,7 @@ On `SIGTERM` or `SIGINT` (`npm start`, the CLI, Docker), it cancels schedules, d
 
 ## Security Notes
 
-- **Sign-in is off by default.** Until it is turned on, anyone who can reach the editor can read, change and run every flow. Turn on [sign-in](#sign-in), or run the editor on a trusted network or behind a proxy that authenticates. With sign-in on, every account can still do everything.
+- **Sign-in is off by default.** Until it is turned on, anyone who can reach the editor (or its [MCP endpoint](mcp.md)) can read, change and run every flow. Turn on [sign-in](#sign-in), or run the editor on a trusted network or behind a proxy that authenticates. With sign-in on, every account can still do everything.
 - With sign-in forced on and no accounts, the first visitor creates the first account. Set `ADMIN_USERNAME` / `ADMIN_PASSWORD` on a public server.
 - Serve the editor over HTTPS when others reach it, so passwords and the session cookie aren't sent in clear text. Behind a proxy, set [`TRUST_PROXY`](#behind-a-reverse-proxy).
 - Turn on the [SSRF guard](#ssrf-guard) when others can reach the editor.

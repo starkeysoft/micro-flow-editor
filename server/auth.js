@@ -11,12 +11,16 @@
 // - CSRF: SameSite=Lax keeps the cookie off cross-site POSTs, and
 //   state-changing requests whose Origin isn't this host are refused.
 // - Brute force: 10 failed logins per IP per 15 minutes, then 429.
+// - API tokens (scripts, MCP clients): `Authorization: Bearer mfe_…`, made
+//   by signed-in users under /api/auth/tokens or with the `user token` CLI.
+//   Only their SHA-256 is stored. A request with a token skips the Origin
+//   check (browsers never add the header on their own, so there is no CSRF).
 import crypto from 'crypto';
 import { promisify } from 'util';
 import express from 'express';
 import { Op } from 'sequelize';
 import { config } from './config.js';
-import { User, Session, getSetting, putSetting } from './db.js';
+import { User, Session, ApiToken, getSetting, putSetting } from './db.js';
 
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'mfe_session';
@@ -155,6 +159,36 @@ async function sessionUser(req, res) {
   return session.User;
 }
 
+// ── API tokens ──
+const TOKEN_PREFIX = 'mfe_';
+const TOKEN_TOUCH_MS = 60 * 1000; // last_used_at is written at most once a minute
+
+/** Creates an API token for a user. The token itself is only returned here. */
+export async function createApiToken(user, name) {
+  const label = String(name ?? '').trim().slice(0, 100);
+  if (!label) throw new AuthError('Give the token a name, e.g. "Claude Code".');
+  const token = `${TOKEN_PREFIX}${crypto.randomBytes(32).toString('base64url')}`;
+  const row = await ApiToken.create({ token_hash: sha256(token), name: label, hint: token.slice(0, 10), user_id: user.id });
+  return { token, ...publicToken(row) };
+}
+
+const publicToken = (t) => ({ id: t.id, name: t.name, hint: t.hint, created_at: t.createdAt, last_used_at: t.last_used_at });
+
+const bearer = (req) => {
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(String(req.headers.authorization ?? ''));
+  return match ? match[1] : null;
+};
+
+// The user an API token belongs to, or null.
+async function tokenUser(token) {
+  const row = await ApiToken.findOne({ where: { token_hash: sha256(token) }, include: User });
+  if (!row || !row.User) return null;
+  if (!row.last_used_at || Date.now() - row.last_used_at.getTime() > TOKEN_TOUCH_MS) {
+    await row.update({ last_used_at: new Date() }).catch(() => {});
+  }
+  return row.User;
+}
+
 const publicUser = (user) => (user ? {
   id: user.id,
   username: user.username,
@@ -199,6 +233,13 @@ function sameOrigin(req) {
 export async function requireAuth(req, res, next) {
   if (!isAuthEnabled()) return next();
   try {
+    const token = bearer(req);
+    if (token) {
+      const user = await tokenUser(token);
+      if (!user) return res.status(401).json({ error: 'invalid API token', auth_required: true });
+      req.user = user;
+      return next();
+    }
     if (!sameOrigin(req)) return res.status(403).json({ error: 'cross-site request refused' });
     const user = await sessionUser(req, res);
     if (!user) return res.status(401).json({ error: 'sign in first', auth_required: true });
@@ -387,6 +428,27 @@ router.delete('/auth/users/:id', handle(async (req, res) => {
   const user = await User.findByPk(req.params.id);
   if (!user) throw new AuthError('user not found', 404);
   await Session.destroy({ where: { user_id: user.id } });
+  await ApiToken.destroy({ where: { user_id: user.id } });
   await user.destroy();
+  res.status(204).end();
+}));
+
+// Your own API tokens. Managing them needs a browser session: a token can't
+// make more tokens.
+router.get('/auth/tokens', handle(async (req, res) => {
+  const user = await signedIn(req, res);
+  const tokens = await ApiToken.findAll({ where: { user_id: user.id }, order: [['createdAt', 'DESC']] });
+  res.json(tokens.map(publicToken));
+}));
+
+router.post('/auth/tokens', handle(async (req, res) => {
+  const user = await signedIn(req, res);
+  res.status(201).json(await createApiToken(user, req.body?.name));
+}));
+
+router.delete('/auth/tokens/:id', handle(async (req, res) => {
+  const user = await signedIn(req, res);
+  const removed = await ApiToken.destroy({ where: { id: req.params.id, user_id: user.id } });
+  if (!removed) throw new AuthError('token not found', 404);
   res.status(204).end();
 }));

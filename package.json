@@ -46,7 +46,9 @@
     "automation",
     "n8n-alternative",
     "webhook",
-    "scheduler"
+    "scheduler",
+    "mcp",
+    "model-context-protocol"
   ],
   "author": "Starkey Software",
   "license": "MIT",
@@ -59,11 +61,13 @@
   },
   "homepage": "https://github.com/starkeysoft/micro-flow-editor#readme",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@ronaldroe/micro-flow": "^4.0.0",
     "express": "^5.2.1",
     "node-schedule": "^2.1.1",
     "sequelize": "^6.37.8",
-    "sqlite3": "^6.0.1"
+    "sqlite3": "^6.0.1",
+    "zod": "^4.6.7"
   },
   "optionalDependencies": {
     "mariadb": "^3.4.0",

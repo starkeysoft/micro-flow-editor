@@ -1,4 +1,4 @@
-// ADMIN_USERNAME/ADMIN_PASSWORD at startup, and the `user` CLI.
+// ADMIN_USERNAME/ADMIN_PASSWORD at startup, and the `user` CLI (including `user token`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'child_process';
@@ -26,6 +26,11 @@ test('user CLI adds, lists, resets and removes accounts', () => {
   assert.equal(r.status, 0, r.stderr);
   r = cli(['list']);
   assert.match(r.stdout, /^ada\t/m);
+  r = cli(['token', 'ada', 'Agent']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^mfe_[\w-]{40,}\n$/, 'only the token on stdout');
+  assert.match(r.stderr, /"Agent" for "ada"/);
+  assert.equal(cli(['token', 'nobody']).status, 1);
   r = cli(['remove', 'ada']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(cli(['list']).stdout, /No accounts yet/);
@@ -45,6 +50,12 @@ test('ADMIN_USERNAME/ADMIN_PASSWORD create the account at startup', async () => 
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'boss', password: 'boss password' }),
   });
   assert.equal(res.status, 200);
+  // A token made by the CLI works against the running server.
+  const r = cli(['token', 'boss']);
+  assert.equal(r.status, 0, r.stderr);
+  const headers = { authorization: `Bearer ${r.stdout.trim()}` };
+  assert.equal((await fetch(`${base}/api/flows`)).status, 401);
+  assert.equal((await fetch(`${base}/api/flows`, { headers })).status, 200);
   await editor.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

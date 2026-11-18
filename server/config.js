@@ -49,4 +49,8 @@ export const config = {
   // Set when running behind a reverse proxy (Express "trust proxy"), so
   // client IPs and HTTPS (for Secure cookies) are read from X-Forwarded-*.
   trust_proxy: env.TRUST_PROXY || '',
+
+  // The MCP endpoint (/mcp) for AI agents. It needs the same sign-in as /api
+  // (an API token when sign-in is on). Set MCP_ENABLED=false to turn it off.
+  mcp_enabled: bool(env.MCP_ENABLED, true),
 };

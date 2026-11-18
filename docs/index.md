@@ -15,14 +15,15 @@ Build micro-flow logic flows on a canvas, run them on a server with manual, sche
 
 ### How It Works
 - [Compilation](compilation.md) - How a graph becomes a tree of nested micro-flow Workflows.
-- [Data Model](data-model.md) - The `flows`, `snapshots`, `archived_flows`, `executions`, `settings`, `users` and `sessions` tables, the graph JSON and the export format.
+- [Data Model](data-model.md) - The `flows`, `snapshots`, `archived_flows`, `executions`, `settings`, `users`, `sessions` and `api_tokens` tables, the graph JSON and the export format.
 
 ### Using It with micro-flow
 - [Runtime](runtime.md) - `compileFlow()` and `runFlow()`: run exported flows in your own Node.js app.
 
 ### Running the Server
-- [Server](server.md) - `startServer()`, the CLI (including `user` for accounts), Docker, environment variables, databases, the autosave cache (memory or Redis), sign-in and limits.
-- [REST API](api.md) - Every `/api` route, autosave drafts, snapshots, the archive, sign-in (`/api/auth/*`), the live event stream and `/webhook/*`.
+- [Server](server.md) - `startServer()`, the CLI (including `user` for accounts and API tokens), Docker, environment variables, databases, the autosave cache (memory or Redis), sign-in and limits.
+- [REST API](api.md) - Every `/api` route, autosave drafts, snapshots, the archive, sign-in (`/api/auth/*`) and API tokens, the live event stream and `/webhook/*`.
+- [MCP for AI Agents](mcp.md) - The `/mcp` endpoint: connecting Claude Code and other MCP clients, API tokens and every tool.
 
 ### Examples
 - [Bundled Templates](examples/templates.md) - The five starter flows, explained node by node.

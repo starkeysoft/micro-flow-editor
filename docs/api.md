@@ -1,12 +1,13 @@
 # REST API
 
-The editor's client talks to the server only through this API, so anything the editor does can be scripted. Routes live in `server/api/flows.js`, `server/api/stream.js`, `server/api/webhooks.js`, `server/auth.js` and `server/server.js`.
+The editor's client talks to the server only through this API, so anything the editor does can be scripted. Routes live in `server/api/flows.js`, `server/api/stream.js`, `server/api/webhooks.js`, `server/auth.js` and `server/server.js`. AI agents can use the [MCP endpoint](mcp.md) at `/mcp` instead.
 
-Sign-in is optional and off by default (see [Server: Sign-in](server.md#sign-in)). While it is on, every `/api` route except [`/api/auth/*`](#sign-in) needs a session cookie; `/webhook/*` never does.
+Sign-in is optional and off by default (see [Server: Sign-in](server.md#sign-in)). While it is on, every `/api` route except [`/api/auth/*`](#sign-in) needs a session cookie or an [API token](#api-tokens); `/webhook/*` never does.
 
 ## Table of Contents
 - [Conventions](#conventions)
 - [Sign-in](#sign-in)
+- [API Tokens](#api-tokens)
 - [Meta](#meta)
 - [Flows](#flows)
 - [Autosave](#autosave)
@@ -27,7 +28,7 @@ Sign-in is optional and off by default (see [Server: Sign-in](server.md#sign-in)
 | Status | Meaning |
 |--------|---------|
 | `400` | Invalid input (unknown node type, duplicate node ids, more than 500 nodes, a trigger that couldn't be activated). |
-| `401` | Sign-in is on and there is no valid session: `{ "error": "sign in first", "auth_required": true }`. |
+| `401` | Sign-in is on and there is no valid session: `{ "error": "sign in first", "auth_required": true }` (`"invalid API token"` for a bad bearer token). |
 | `403` | Sign-in is on and a state-changing request came from another site: `{ "error": "cross-site request refused" }`. |
 | `404` | Unknown flow, snapshot, archived flow, execution or route. |
 | `409` | Conflict: for example the only snapshot of an active flow, or unarchiving a flow whose id is in use. |
@@ -140,17 +141,41 @@ Turns sign-in on (the editor's switch) and signs you in. Same body as `login`. W
 
 ### DELETE /api/auth/users/:id
 
-*Signed in.* Deletes an account and signs it out everywhere. `204`. `409` for your own account (`You can't delete your own account.`), `404` for an unknown id.
+*Signed in.* Deletes an account, signs it out everywhere and revokes its API tokens. `204`. `409` for your own account (`You can't delete your own account.`), `404` for an unknown id.
+
+## API Tokens
+
+An API token lets a script or an [MCP client](mcp.md) use every `/api` route (and `/mcp`) as its user while sign-in is on, without a cookie:
+
+```bash
+curl -H 'Authorization: Bearer mfe_…' http://localhost:8090/api/flows
+```
+
+A request with an `Authorization: Bearer` header is authenticated by the token alone (a wrong or revoked one gets `401 { "error": "invalid API token", "auth_required": true }`) and isn't subject to the `Origin` check. Tokens can't manage tokens: these routes are *signed in* (browser session) only. See [Server: API Tokens](server.md#api-tokens).
+
+A **token** object is `{ "id": "…", "name": "Claude Code", "hint": "mfe_AbCdEf", "created_at": "…", "last_used_at": null }`.
+
+### GET /api/auth/tokens
+
+*Signed in.* Your own tokens, newest first. The tokens themselves are never returned.
+
+### POST /api/auth/tokens
+
+*Signed in.* `{ "name": "Claude Code" }` (1–100 characters). `201` with the token object plus `token`, the only time the token is shown. `400` without a name.
+
+### DELETE /api/auth/tokens/:id
+
+*Signed in.* Revokes one of your tokens. `204`, or `404` for an unknown id or someone else's token.
 
 ## Meta
 
 ### GET /api/meta
 
 ```json
-{ "dialect": "sqlite", "block_private_networks": false, "max_loop_iterations": 1000, "auth_enabled": false }
+{ "dialect": "sqlite", "block_private_networks": false, "max_loop_iterations": 1000, "auth_enabled": false, "mcp_enabled": true }
 ```
 
-`auth_enabled` says whether sign-in is on. Like every non-`auth` route, this one needs a session while sign-in is on (`401` otherwise); use [`GET /api/auth/session`](#get-apiauthsession) to check without one.
+`auth_enabled` says whether sign-in is on, and `mcp_enabled` whether the [MCP endpoint](mcp.md) is served. Like every non-`auth` route, this one needs a session while sign-in is on (`401` otherwise); use [`GET /api/auth/session`](#get-apiauthsession) to check without one.
 
 ## Flows
 
@@ -215,6 +240,7 @@ Updates any of `name`, `description`, `graph`, `options` and `active`. Fields yo
 { "active": true }
 ```
 
+- Editors that have the flow open get a [`flow_changed`](#live-event-stream) message, and reload it.
 - **With a `graph` or `options`**, this is a save, for API clients: a `graph` discards any pending autosave draft of the flow; the changes are written and a [snapshot](#snapshots) labelled `Saved through the API` is created, which an active flow then runs.
 - **Turning a flow on** (`"active": true` on an inactive flow) creates a snapshot labelled `Activated` if the flow (name, description, graph or options) differs from its latest snapshot, so the triggers start with what you see.
 - Other changes (`name` or `description` alone, or `active`) only update the flow row and don't create a snapshot.
@@ -426,7 +452,7 @@ source.onmessage = (event) => {
 };
 ```
 
-The stream sends `retry: 3000` first, then a `{ "type": "hello" }` message, then a message for each update. A `: ping` comment every 25 seconds keeps proxies from closing it. Every message except `hello` has an `execution_id`.
+The stream sends `retry: 3000` first, then a `{ "type": "hello" }` message, then a message for each update. A `: ping` comment every 25 seconds keeps proxies from closing it. Every message except `hello` and `flow_changed` has an `execution_id`.
 
 | `type` | Other fields | When |
 |--------|--------------|------|
@@ -438,6 +464,7 @@ The stream sends `retry: 3000` first, then a `{ "type": "hello" }` message, then
 | `output` | `card: { title, image, text, tone, at }` | An Output Card ran. |
 | `log` | `entry` (a [log entry](data-model.md#log-entries)) | Something was logged. |
 | `execution_finished` | `execution: { id, flow_id, mode, status, error, started_at, finished_at }` | The run ended and was saved. |
+| `flow_changed` | `content` (`true` when the name, description, graph or options changed, `false` for `active` alone), `source` (`api` or `mcp`) | The flow was changed through `PUT /api/flows/:id` or [MCP](mcp.md). No `execution_id`. |
 
 Hidden steps and fan-out branch steps send no messages.
 
@@ -458,6 +485,7 @@ curl -X POST http://localhost:8090/webhook/greet -H 'Content-Type: application/j
 
 | Path | Description |
 |------|-------------|
+| `POST /mcp` | The [MCP endpoint](mcp.md) for AI agents (unless `MCP_ENABLED=false`). |
 | `GET /shared/*` | The node catalogue and templates (`shared/nodes.js`, `shared/templates.js`) as static files. |
 | `GET /*` | The built client. Unknown paths get `index.html`, so links like `/flows/<id>` load directly. |
 | `/api/*` (anything else) | `404 { "error": "not found" }` (`401` first while sign-in is on and you aren't signed in). |

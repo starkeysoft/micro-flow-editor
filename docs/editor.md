@@ -174,13 +174,17 @@ If an active flow's triggers are invalid (a bad cron expression, a webhook path 
 The **Snapshots** tab in the drawer lists them, newest first:
 
 - At the top, an optional **Label** (up to 200 characters) and a **Save snapshot** button.
-- Each snapshot shows its label (or **Snapshot**), when it was saved, its node count and who saved it (when [sign-in](#signing-in) is on). The newest one has a **live** badge when the flow is active, and **latest** otherwise. Snapshots saved by other means are labelled **Activated** or **Saved through the API**.
+- Each snapshot shows its label (or **Snapshot**), when it was saved, its node count and who saved it (when [sign-in](#signing-in) is on). The newest one has a **live** badge when the flow is active, and **latest** otherwise. Snapshots saved by other means are labelled **Activated**, **Saved through the API** or **Saved through MCP**.
 - A note appears when the canvas has changes that aren't in a snapshot.
 - **Restore** loads the snapshot onto the canvas (graph, name, description and Stop on first error) after asking. It doesn't change any snapshot: it is an ordinary edit, autosaved like any other, and **Ctrl/⌘ + Z** undoes the graph part of it. For an active flow, press Save afterwards to make it live.
 - **⇩** downloads the snapshot as JSON, in the same [export format](data-model.md#export-format) as **Export JSON**, so it can be imported as a new flow.
 - **✕** deletes the snapshot after asking. Deleting the newest snapshot of an active flow makes the one before it live; with no snapshots left, the triggers run the autosaved flow.
 
 The server keeps up to `MAX_SNAPSHOTS_PER_FLOW` snapshots per flow (100 by default) and deletes the oldest when there are more. Deleting a flow deletes its snapshots.
+
+### Changes from Elsewhere
+
+An AI agent ([MCP](mcp.md)) or a script (`PUT /api/flows/:id`) can change a flow while you have it open. If the canvas has no edits waiting to be sent, the editor loads the new version and says "This flow was changed by an AI agent (MCP); showing the new version." (undo history starts again from it). If you are in the middle of an edit, it warns you instead: your next edit replaces the other change, or reload the page to see it. Switching the flow on or off elsewhere just updates the **Active** switch and the snapshot list.
 
 ## Undo and Redo
 
@@ -264,5 +268,7 @@ While sign-in is on and you are signed in, the dialog also shows:
 
 - **Your account** - your username, **Sign out**, and **Change password** (current password, then the new one twice). Changing it signs out your other sessions.
 - **Users** - every account with when it last signed in. Add one with a username and password (8+ characters), or delete one with **✕** (it is signed out at once). You can't delete yourself. Every user can see and edit every flow; there are no roles.
+
+The **AI agents (MCP)** section (unless the server sets `MCP_ENABLED=false`) shows the [MCP](mcp.md) endpoint's URL and a `claude mcp add …` command with **Copy**. While sign-in is on and you are signed in, it also lists your **API tokens** (name, first characters, when last used) with **✕** to revoke one, and creates new ones: give it a name and press **Create API token**. The new token is shown once, and the command above then includes it.
 
 A forgotten password can't be reset from the editor. Use the `micro-flow-editor user passwd <name>` command on the server (see [Server: Recovery](server.md#recovery)).

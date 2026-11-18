@@ -16,6 +16,7 @@ A visual, drag-and-drop builder for [`@ronaldroe/micro-flow`](https://www.npmjs.
 - **Any SQL database** - SQLite by default. PostgreSQL, MySQL, MariaDB and SQL Server are supported through Sequelize with `DATABASE_URL`.
 - **Expressions** - `{{ path }}`, `$item`, `$trigger`, `$node["Name"]`, `$now` and `$execution` in node fields. There is no code node and no `eval`.
 - **Runtime for your app** - `compileFlow()` / `runFlow()` run an exported flow in any Node.js app. `compileFlow(...).workflow` is a real micro-flow `Workflow`.
+- **MCP for AI agents** - An MCP endpoint at `/mcp` lets Claude Code, Claude Desktop or any MCP client read the node catalogue and build, check, save, switch on and run flows. With sign-in on, agents use API tokens.
 - **Optional sign-in** - Off by default. Turn it on in the editor's Settings (or force it with `AUTH_ENABLED`) to require a username and password for the editor and its API. Webhooks stay public.
 - **Works on phones** - Bottom-sheet palette and inspector, a floating + button, tap-to-connect ports and pinch zoom.
 - **Docker-ready** - One `docker compose up`, with optional PostgreSQL or MySQL profiles.
@@ -64,7 +65,7 @@ npx @ronaldroe/micro-flow-editor --port 8090 --db postgres://user:pass@localhost
 
 Flags override the environment. From a checkout, run `node bin/micro-flow-editor.js` after `npm run build`. See [Server](docs/server.md) for the programmatic `startServer()` API.
 
-`micro-flow-editor user <list|add|passwd|remove> [username]` manages sign-in accounts against the same database (put `--db` / `--sqlite` before `user`). Passwords are read from a hidden prompt, or from stdin when piped, never from the command line. See [Server: The user Command](docs/server.md#the-user-command).
+`micro-flow-editor user <list|add|passwd|remove|token> [username]` manages sign-in accounts and API tokens against the same database (put `--db` / `--sqlite` before `user`). Passwords are read from a hidden prompt, or from stdin when piped, never from the command line. See [Server: The user Command](docs/server.md#the-user-command).
 
 ## Configuration
 
@@ -89,6 +90,7 @@ Every setting is optional. Copy `.env.example` to `.env` to set them.
 | `ADMIN_PASSWORD` | *(empty)* | Password for `ADMIN_USERNAME` (8–256 characters). |
 | `SESSION_TTL_HOURS` | `168` | How long a sign-in lasts. Sessions in use are renewed. |
 | `TRUST_PROXY` | *(empty)* | Behind a reverse proxy: `true`, a hop count, or addresses (Express `trust proxy`), so client IPs, HTTPS (for `Secure` cookies) and the host come from `X-Forwarded-*`. Empty, `false`, `no`, `off` or `0` trusts no proxy. |
+| `MCP_ENABLED` | `true` | Serves the [MCP endpoint](docs/mcp.md) for AI agents at `/mcp`. `false` turns it off. |
 
 Boolean variables accept `1`, `true`, `yes` or `on`.
 
@@ -119,6 +121,18 @@ docker compose exec micro-flow-editor node bin/micro-flow-editor.js user passwd 
 ```
 
 See [Server: Sign-in](docs/server.md#sign-in) for sessions, proxies, rate limiting and recovery.
+
+## MCP for AI Agents
+
+The server is also an [MCP](https://modelcontextprotocol.io) server at `/mcp`, so an AI agent can build and run flows for you. With Claude Code:
+
+```bash
+claude mcp add --transport http micro-flow http://localhost:8090/mcp
+# with sign-in on, add an API token from Settings (or `micro-flow-editor user token <name>`):
+claude mcp add --transport http micro-flow http://localhost:8090/mcp --header "Authorization: Bearer mfe_…"
+```
+
+The agent gets tools to read the node catalogue and templates, list and read flows, check a graph without running it, create and update flows (each update saves a snapshot), switch flows on and off, run them and read the results, and archive flows. An editor with the flow open reloads when an agent changes it. API tokens (**Settings → AI agents (MCP)**) act as their user and also work for the REST API. Set `MCP_ENABLED=false` to turn the endpoint off. See [MCP for AI Agents](docs/mcp.md).
 
 ## Choosing a Database
 
@@ -230,7 +244,7 @@ On screens 760px wide or less, the editor switches to a touch layout:
 npm test
 ```
 
-Runs `test/*.test.js` with Node's built-in test runner. The engine, server, autosave, archive and sign-in tests use an in-memory SQLite database (the `user` CLI tests in `test/auth-cli.test.js` use a temporary SQLite file), and the runtime tests need no database. The Redis autosave test (`test/drafts-redis.test.js`) is skipped unless `TEST_REDIS_URL` points at a Redis server:
+Runs `test/*.test.js` with Node's built-in test runner. The engine, server, autosave, archive, sign-in and MCP tests use an in-memory SQLite database (the `user` CLI tests in `test/auth-cli.test.js` use a temporary SQLite file), and the runtime tests need no database. The Redis autosave test (`test/drafts-redis.test.js`) is skipped unless `TEST_REDIS_URL` points at a Redis server:
 
 ```bash
 TEST_REDIS_URL=redis://localhost:6379 npm test
@@ -248,6 +262,7 @@ TEST_REDIS_URL=redis://localhost:6379 npm test
 - [Runtime](docs/runtime.md)
 - [Server](docs/server.md)
 - [REST API](docs/api.md)
+- [MCP for AI Agents](docs/mcp.md)
 - [Data Model](docs/data-model.md)
 - [Examples](docs/examples/)
 

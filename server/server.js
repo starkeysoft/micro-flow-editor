@@ -7,6 +7,7 @@ import { initDatabase, sequelize } from './db.js';
 import { router as flowsRouter } from './api/flows.js';
 import { router as streamRouter } from './api/stream.js';
 import { router as webhooksRouter } from './api/webhooks.js';
+import { router as mcpRouter } from './api/mcp.js';
 import { markInterrupted } from './engine/runner.js';
 import { registerAll, unregisterAll } from './engine/triggers.js';
 import { startDraftWorker, stopDraftWorker, cacheKind } from './drafts.js';
@@ -58,9 +59,13 @@ export async function start() {
     block_private_networks: config.block_private_networks,
     max_loop_iterations: config.max_loop_iterations,
     auth_enabled: isAuthEnabled(),
+    mcp_enabled: config.mcp_enabled,
   }));
   app.use('/api', flowsRouter, streamRouter);
   app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
+
+  // MCP for AI agents: same sign-in as /api (an API token or a session).
+  if (config.mcp_enabled) app.use('/mcp', express.json({ limit: '4mb' }), requireAuth, mcpRouter);
 
   // The node catalogue is shared with the browser.
   app.use('/shared', express.static(path.join(root, 'shared')));
@@ -77,7 +82,7 @@ export async function start() {
   const server = await new Promise((resolve) => {
     const s = app.listen(config.port, () => resolve(s));
   });
-  console.log(`micro-flow-editor running → http://localhost:${server.address().port} (database: ${sequelize.getDialect()}, autosave cache: ${cacheKind()}, sign-in ${isAuthEnabled() ? 'on' : 'off'})`);
+  console.log(`micro-flow-editor running → http://localhost:${server.address().port} (database: ${sequelize.getDialect()}, autosave cache: ${cacheKind()}, sign-in ${isAuthEnabled() ? 'on' : 'off'}, MCP ${config.mcp_enabled ? 'at /mcp' : 'off'})`);
   if (isAuthEnabled() && !config.admin_username) {
     const { User } = await import('./db.js');
     if ((await User.count()) === 0) console.log('No accounts yet: the first person to open the editor creates one.');

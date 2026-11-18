@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **MCP endpoint for AI agents** at `/mcp` (Model Context Protocol, Streamable HTTP, stateless), so
+  Claude Code, Claude Desktop or any MCP client can build and run flows. Tools: `get_node_types`
+  (graph format, expressions, every node type, operators), `list_templates`, `list_flows`,
+  `get_flow`, `check_flow` (compile without running, with warnings for wrong ports and unconnected
+  nodes), `create_flow`, `update_flow`, `set_flow_active`, `run_flow` (waits for the result: each
+  node's last output, Output cards, the log tail), `get_execution`, `list_executions`,
+  `stop_execution` and `archive_flow`. It needs the same sign-in as `/api`, and refuses requests
+  whose `Origin` names another host. Setting `MCP_ENABLED` (`startServer({ mcp_enabled })`,
+  default `true`) turns it off. See `docs/mcp.md`.
+- **API tokens** (`Authorization: Bearer mfe_…`) for MCP clients and scripts while sign-in is on.
+  They act as their user and work on every `/api` route. Create and revoke them in the new
+  **Settings → AI agents (MCP)** section (which also shows the endpoint and a `claude mcp add`
+  command), through `GET`/`POST /api/auth/tokens` and `DELETE /api/auth/tokens/:id` (browser
+  session only), or with `micro-flow-editor user token <username> [name]`. Only their SHA-256 is
+  stored, in the new `api_tokens` table. Deleting a user revokes their tokens.
+- `flow_changed` message on a flow's live event stream when it is changed through
+  `PUT /api/flows/:id` or MCP. An open editor reloads the flow, or warns when it has edits not yet
+  sent. Snapshots saved by MCP are labelled `Saved through MCP`.
+- `GET /api/meta` reports `mcp_enabled`.
+
 ## [1.1.0] - 2026-10-13
 
 ### Added
